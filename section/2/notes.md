@@ -14,9 +14,9 @@ title: Stochastic Optimization Basics in 1D
 4. [Experiment: 1D linear regression with noisy labels](#4-experiment-1d-linear-regression-with-noisy-labels)
 5. [Step sizes: constant steps hit a noise floor](#5-step-sizes-constant-steps-hit-a-noise-floor)
 6. [Step size schedules that converge](#6-step-size-schedules-that-converge)
-7. [When constant steps are enough](#7-when-constant-steps-are-enough)
-8. [Why SGD works at all: unbiasedness and variance](#8-why-sgd-works-at-all-unbiasedness-and-variance)
-9. [Minibatches: variance reduction and parallelism](#9-minibatches-variance-reduction-and-parallelism)
+7. [Why SGD works at all: unbiasedness and variance](#7-why-sgd-works-at-all-unbiasedness-and-variance)
+8. [Minibatches: variance reduction and parallelism](#8-minibatches-variance-reduction-and-parallelism)
+9. [When constant steps are enough](#9-when-constant-steps-are-enough)
 10. [Diagnostics: monitor validation loss, not just training loss](#10-diagnostics-monitor-validation-loss-not-just-training-loss)
 11. [Conclusion](#11-conclusion)
 12. [Appendix: code to generate all figures](#appendix-code-to-generate-all-figures)
@@ -266,34 +266,7 @@ The next figure compares a constant step size, a geometric schedule, and power s
 ![Step size schedules](figures/sgd_1d_stepsize_schedules.png)
 *Figure 2.4: Constant step size hits a noise floor. A geometric schedule can decay so quickly that it “freezes” early. Power schedules $\eta_k=\eta_0/(k+1)^p$ with $p \in (\tfrac{1}{2},1]$ keep making progress and can drive the objective gap down further, at the cost of slower long-run movement.*
 
-## 7. When constant steps are enough
-
-Constant step size does not always imply a noise floor.
-
-A clean sufficient condition is: at the optimum, the per-sample gradients vanish, not just the average gradient.
-
-In our regression setup, if the data are noiseless,
-
-$$
-y_i = x_i,
-$$
-
-then $w^\star=1$ and for every sample
-
-$$
-\ell_i'(w) = (wx_i - y_i)x_i = (w-1)x_i^2.
-$$
-
-At $w=1$, each $\ell_i'(1)=0$. There is no gradient noise at the optimum. SGD behaves like a stable deterministic method and can converge all the way. In this toy problem, even a constant step size like $\eta=0.5$ converges quickly when labels are noiseless.
-
-With label noise ($\sigma>0$), the residuals never vanish, so the sample gradients do not vanish at the optimum. The gradient estimator has nonzero variance even at $w^\star$, and constant-step SGD keeps bouncing.
-
-![Noiseless vs noisy: constant step size](figures/sgd_1d_noiseless_vs_noisy.png)
-*Figure 2.5: With noiseless labels, constant-step SGD can converge to high precision because every sample gradient vanishes at the optimum. With noisy labels, constant-step SGD stabilizes at a nonzero noise floor.*
-
-Which regime is more common depends on model expressivity. In classical machine learning, models are often too simple to fit noisy data exactly, so constant-step SGD still sees gradient noise. In deep learning, models can often interpolate even noisy labels, so constant step sizes are frequently acceptable in practice. It is still useful to keep both regimes in mind.
-
-## 8. Why SGD works at all: unbiasedness and variance
+## 7. Why SGD works at all: unbiasedness and variance
 
 SGD works because the stochastic gradient is an unbiased estimate of the full gradient.
 
@@ -329,7 +302,7 @@ In the regression model above, increasing $\sigma$ increases the noise in the la
 ![Effect of label noise on SGD](figures/sgd_1d_noise_variance.png)
 *Figure 2.6: Larger label noise $\sigma$ increases the variance of sample gradients, which raises the noise floor and makes the trajectory noisier for the same step size.*
 
-## 9. Minibatches: variance reduction and parallelism
+## 8. Minibatches: variance reduction and parallelism
 
 Variance reduction is the simplest lever you can pull.
 
@@ -390,6 +363,33 @@ Parallelism.
 If you can compute the $B$ sample gradients in parallel (e.g., on a GPU), then a minibatch step can take close to the wall-clock time of a batch-1 step.
 
 In that case, Figure 2.7 is the relevant one: fewer iterations can mean faster time-to-result.
+
+## 9. When constant steps are enough
+
+Constant step size does not always imply a noise floor.
+
+A clean sufficient condition is: at the optimum, the per-sample gradients vanish, not just the average gradient.
+
+In our regression setup, if the data are noiseless,
+
+$$
+y_i = x_i,
+$$
+
+then $w^\star=1$ and for every sample
+
+$$
+\ell_i'(w) = (wx_i - y_i)x_i = (w-1)x_i^2.
+$$
+
+At $w=1$, each $\ell_i'(1)=0$. There is no gradient noise at the optimum. SGD behaves like a stable deterministic method and can converge all the way. In this toy problem, even a constant step size like $\eta=0.5$ converges quickly when labels are noiseless.
+
+With label noise ($\sigma>0$), the residuals never vanish, so the sample gradients do not vanish at the optimum. The gradient estimator has nonzero variance even at $w^\star$, and constant-step SGD keeps bouncing.
+
+![Noiseless vs noisy: constant step size](figures/sgd_1d_noiseless_vs_noisy.png)
+*Figure 2.5: With noiseless labels, constant-step SGD can converge to high precision because every sample gradient vanishes at the optimum. With noisy labels, constant-step SGD stabilizes at a nonzero noise floor.*
+
+Which regime is more common depends on model expressivity. In classical machine learning, models are often too simple to fit noisy data exactly, so constant-step SGD still sees gradient noise. In deep learning, models can often interpolate even noisy labels, so constant step sizes are frequently acceptable in practice. It is still useful to keep both regimes in mind.
 
 ## 10. Diagnostics: monitor validation loss, not just training loss
 
@@ -779,7 +779,7 @@ def main():
     # ---------------------------------------
     # Figure 2.6: effect of sigma (variance)
     # ---------------------------------------
-    sigmas = [0.1, 1.0, 10.0]
+    sigmas = [0.01, 0.1, 1.0]
     curves = []
     for s in sigmas:
         y = x_shared + s * g_shared
