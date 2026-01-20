@@ -144,7 +144,7 @@ Two common diagnostics are:
 
 Since we're trying to minimize $L$, we'd like it to decrease along the iterate sequence. If we also know $L^\ast$ we can also tell how well we're solving the problem. However in general $L^\ast$ is not known, so we can never quite tell how well we're solving the problem.
 
-Gradient norms are a slightly weaker metric. For certain problems, we can show that whenever $\|L'(w_k)\|$ is small we also have that $L(w_k) - L^\ast$ is small. However, characterizing the precise relationship between the two is difficult and, in general, small gradients do not mean the objective is small. On the other hand, gradients are at least always computable and always tend to zero as our iterates approach minimizers, so they're still a useful diagnostic.
+Gradient norms are a slightly weaker metric. For certain problems, we can show that whenever $\|L'(w_k)\|$ is small we also have that $L(w_k) - L^\ast$ is small. However, characterizing the precise relationship between the two is difficult and, in general, small gradients do not mean the objective is small. For example, for the double well $L(w)=\tfrac{1}{2}(w^2-1)^2$ we have $L'(0)=0$ but $L(0)=\tfrac{1}{2}$. On the other hand, gradients are at least always computable and always tend to zero as our iterates approach minimizers, so they're still a useful diagnostic.
 
 ### Termination criteria
 

@@ -127,6 +127,7 @@ $$
 - Objective values: $L(w_k)$ (or $L(w_k)-L^\ast$ if $L^\ast$ is known).
 - Gradient norm: $\|L'(w_k)\|$.
 - Small gradients do not guarantee small objective.
+- Example: for $L(w)=\tfrac{1}{2}(w^2-1)^2$ we have $L'(0)=0$ but $L(0)=\tfrac{1}{2}$.
 
 ---
 
