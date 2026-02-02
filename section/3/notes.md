@@ -344,7 +344,8 @@ This is the exact same derivation as in 1D. The only difference is that:
 
 ## 3. Dev environment: Cursor and uv
 
-This section is not about philosophy. It is about eliminating “I can’t run the code” as a failure mode.
+Now we switch gears to getting up to speed with cursor
+
 
 ### 3.1 In-class demo: Cursor workflow
 
@@ -359,7 +360,7 @@ In class I will live-demo the following in Cursor.
    - run scripts,
    - fix errors by reading tracebacks.
 
-The point of the demo is not that Cursor is magic. The point is that you should have a workflow where:
+The point is that you should have a workflow where:
 
 - code lives in a repo,
 - you can reproduce an environment,
@@ -423,6 +424,13 @@ This is a prompt you can copy and paste into Cursor agent mode. It is written so
 
 #### Prompt to paste into the agent
 
+These are the packages needed to run the code in this section:
+
+- `torch`
+- `numpy`
+- `matplotlib`
+- `pytest`
+
 ```text
 You are in the root of a git repository.
 
@@ -434,30 +442,21 @@ Requirements:
    - figures/
    - tests/
 
-2) Create a Python script at:
-   script/gd_1d_torch.py
-
-   The script must be EXACTLY the Lecture 1 "A complete 1D gradient descent loop in PyTorch" version, including:
-   - gd_1d_torch(...)
-   - save_diagnostics_plot(...)
-   - main() that runs at least the quadratic example and saves:
-       figures/gd_torch_quadratic_diagnostics.png
-   - use matplotlib to save the plot
-   - print the final stats like in the lecture
-
-3) Add a .gitignore that ignores:
+2) Add a .gitignore that ignores:
    - .venv/
    - __pycache__/
    - .pytest_cache/
    - *.pyc
 
-4) Create a requirements file at the repo root named:
+3) Create a requirements file at the repo root named:
    requirements.txt
-   It must contain at least:
+   It must contain:
    - torch
    - matplotlib
+   - numpy
+   - pytest
 
-5) Create an install script at:
+4) Create an install script at:
    script/install.sh
 
    install.sh must:
@@ -467,15 +466,15 @@ Requirements:
    - install requirements into that venv using uv
    - print clear next steps to the user (how to activate the venv and run the script)
 
-6) Make script/install.sh executable.
+5) Make script/install.sh executable.
 
-7) Create a README.md that explains:
+6) Create a README.md that explains:
    - how to run script/install.sh
    - how to activate the venv
    - how to run script/gd_1d_torch.py
    - how to run tests
 
-8) Add a pytest test in:
+7) Add a pytest test in:
    tests/test_install_and_run.py
 
    The test must:
@@ -538,6 +537,34 @@ print("A.shape:", A.shape)
 #          [4, 5, 6]])
 # x.shape: torch.Size([3])
 # A.shape: torch.Size([2, 3])
+```
+
+#### Indexing with `[]` and `:`
+
+Use `[]` to access elements and slices. `:` means “all entries along that axis.” `-1` means “last.”
+
+```python
+import torch
+
+x = torch.tensor([10.0, 20.0, 30.0, 40.0])
+A = torch.tensor([[1, 2, 3],
+                  [4, 5, 6],
+                  [7, 8, 9]])
+
+print("x[0]:", x[0])
+print("x[-1]:", x[-1])
+print("x[1:3]:", x[1:3])
+print("A[0, 1]:", A[0, 1])
+print("A[1, :]:", A[1, :])
+print("A[:, -1]:", A[:, -1])
+
+# Output:
+# x[0]: tensor(10.)
+# x[-1]: tensor(40.)
+# x[1:3]: tensor([20., 30.])
+# A[0, 1]: tensor(2)
+# A[1, :]: tensor([4, 5, 6])
+# A[:, -1]: tensor([3, 6, 9])
 ```
 
 #### From and to NumPy
@@ -640,19 +667,19 @@ print("ones:\n", o)
 #          [1., 1., 1.]])
 ```
 
-#### Copy vs clone
+#### Reference/clone
 
 Two things that look similar in Python are not the same in PyTorch:
 
-- assignment copies a reference,
-- `clone()` copies data.
+- assignment creates a reference (same storage, same graph),
+- `clone()` copies data (new storage, graph connection preserved).
 
 ```python
 import torch
 
 x = torch.tensor([1.0, 2.0, 3.0])
 
-y = x              # reference copy (no new memory)
+y = x              # reference (no new memory)
 z = x.clone()      # data copy (new memory)
 
 print("x.data_ptr:", x.data_ptr())
@@ -679,10 +706,13 @@ So:
 
 - “copy” in casual Python talk often means “another name for the same object.”
 - `clone()` means “a new tensor with its own storage.”
+- if `x` is tracked, `x.clone()` is still attached to the computation graph; use `x.detach().clone()` to copy without the graph.
 
-### 4.3 Tensor manipulation: shape, reshape, view, flatten, concat
+### 4.3 Tensor manipulation: shape, reshape, view, concat, squeeze
 
 #### `.numel` and `.shape`
+
+Access to tensor shape and number of elements.
 
 ```python
 import torch
@@ -695,6 +725,40 @@ print("A.numel():", A.numel())
 # A.shape: torch.Size([2, 3, 4])
 # A.numel(): 24
 ```
+
+#### Memory layout: contiguous vs non-contiguous
+
+Aside: this will help with `reshape`/`view` below, and it will matter for efficiency later. PyTorch is row-major (C-order) by default, so the last index changes fastest in memory.
+
+PyTorch tensors have **strides**, which describe how to step through memory to move along each dimension. Concretely, the stride tuple tells you how many *elements* you jump in the underlying 1D storage when you increment an index by 1 along each axis.
+
+Example: for a 3×4 row-major tensor, a stride of `(4, 1)` means “move 4 elements to go down one row, move 1 element to go right one column.”
+
+The default layout for a 2D tensor is row-major contiguous in the sense that the last dimension is contiguous.
+
+Transpose changes the stride pattern without moving data.
+
+```python
+import torch
+
+A = torch.arange(12).reshape(3, 4)
+AT = A.t()
+
+print("A.shape:", A.shape, "stride:", A.stride(), "contiguous:", A.is_contiguous())
+print("AT.shape:", AT.shape, "stride:", AT.stride(), "contiguous:", AT.is_contiguous())
+
+# Output:
+# A.shape: torch.Size([3, 4]) stride: (4, 1) contiguous: True
+# AT.shape: torch.Size([4, 3]) stride: (1, 4) contiguous: False
+```
+
+**Figure 3.5: row-major vs column-major intuition.**  
+![Row-major vs column-major memory layout](figures/memory_layout_row_vs_col.png)
+*Figure 3.5: A 2D array is stored in 1D memory. Row-major means row entries are contiguous. Column-major means column entries are contiguous. Strides are the precise way to describe both.*
+
+We will talk about efficiency considerations later, but an actionable rule is:
+
+- if you see `is_contiguous()` is `False` and performance matters, consider making a contiguous copy with `.contiguous()` at an appropriate point.
 
 #### `reshape`: change shape (maybe copy)
 
@@ -744,6 +808,8 @@ One might think `reshape` and `view` are identical. However:
 - `view` requires the tensor to be contiguous in memory,
 - `reshape` will return a view when possible, and otherwise it will copy.
 
+So when the tensor is contiguous, `view` and `reshape` are identical: both return a view with no data copy.
+
 A standard way to make a non-contiguous tensor is transpose.
 
 ```python
@@ -780,62 +846,6 @@ print("reshape worked:", r)
 # Output:
 # view failed: view size is not compatible with input tensor's size and stride ...
 # reshape worked: tensor([ 0,  4,  8,  1,  5,  9,  2,  6, 10,  3,  7, 11])
-```
-
-#### `flatten` and `unflatten`
-
-`flatten` is a convenient wrapper around reshaping to 1D. Whether it is a view or a copy depends on contiguity.
-
-```python
-import torch
-
-A = torch.arange(12).reshape(3, 4)
-f = A.flatten()
-
-print("A.data_ptr == f.data_ptr?", A.data_ptr() == f.data_ptr())
-print("f:", f)
-
-# Output:
-# A.data_ptr == f.data_ptr? True
-# f: tensor([ 0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11])
-```
-
-Now a non-contiguous example:
-
-```python
-import torch
-
-A = torch.arange(12).reshape(3, 4)
-AT = A.t()
-f = AT.flatten()
-
-print("AT.is_contiguous():", AT.is_contiguous())
-print("AT.data_ptr == f.data_ptr?", AT.data_ptr() == f.data_ptr())
-
-# Output:
-# AT.is_contiguous(): False
-# AT.data_ptr == f.data_ptr? False
-```
-
-So `flatten` does not promise a view. It promises a flattened tensor.
-
-`unflatten` is the inverse operation when you know the target shape:
-
-```python
-import torch
-
-x = torch.arange(12)
-A = x.unflatten(dim=0, sizes=(3, 4))
-
-print("A.shape:", A.shape)
-print("A:\n", A)
-
-# Output:
-# A.shape: torch.Size([3, 4])
-# A:
-#  tensor([[ 0,  1,  2,  3],
-#          [ 4,  5,  6,  7],
-#          [ 8,  9, 10, 11]])
 ```
 
 #### Concatenation: vertical and horizontal
@@ -931,9 +941,221 @@ print(A2)
 #         [1., 2., 3.]])
 ```
 
-### 4.4 Computational graphs in higher dimensions
+### 4.4 A larger tour of the PyTorch API
 
-The mechanism of autodiff does not change in higher dimensions. The objects do.
+This is not an exhaustive tour. It is a “things you will use constantly later” tour.
+
+#### Entrywise operations
+
+Any scalar function can be applied entrywise.
+
+```python
+import torch
+
+x = torch.tensor([1.0, 2.0, 3.0])
+
+print("exp:", torch.exp(x))
+print("log:", torch.log(x))
+print("sin:", torch.sin(x))
+print("x**2:", x**2)
+print("x*x:", x*x)
+
+# Output:
+# exp: tensor([ 2.7183,  7.3891, 20.0855])
+# log: tensor([0.0000, 0.6931, 1.0986])
+# sin: tensor([0.8415, 0.9093, 0.1411])
+# x**2: tensor([1., 4., 9.])
+# x*x: tensor([1., 4., 9.])
+```
+
+Two ways to square a vector (`x**2` vs `x*x`) are equivalent here.
+
+#### Reductions replace loops
+
+Reductions compute aggregates over dimensions.
+
+```python
+import torch
+
+A = torch.tensor([[1.0, 2.0],
+                  [3.0, 4.0]])
+
+print("sum all:", A.sum().item())
+print("sum dim=0:", A.sum(dim=0))
+print("sum dim=1:", A.sum(dim=1))
+print("mean:", A.mean().item())
+print("max:", A.max().item())
+print("argmax (flattened):", A.argmax().item())
+
+# Output:
+# sum all: 10.0
+# sum dim=0: tensor([4., 6.])
+# sum dim=1: tensor([3., 7.])
+# mean: 2.5
+# max: 4.0
+# argmax (flattened): 3
+```
+
+
+#### Basic linear algebra
+
+```python
+import torch
+
+A = torch.tensor([[1.0, 2.0],
+                  [3.0, 4.0]])
+x = torch.tensor([10.0, 20.0])
+
+print("A.T:\n", A.t())
+print("A @ x:", (A @ x))
+print("x @ x:", (x @ x))   # inner product for 1D tensors
+print("||x||:", torch.norm(x))
+
+# Output:
+# A.T:
+#  tensor([[1., 3.],
+#          [2., 4.]])
+# A @ x: tensor([ 50., 110.])
+# x @ x: tensor(500.)
+# ||x||: tensor(...)
+```
+
+#### Matrix-matrix multiplication
+
+```python
+import torch
+
+A = torch.randn(2, 3)
+B = torch.randn(3, 4)
+C = A @ B
+
+print("C.shape:", C.shape)
+
+# Output:
+# C.shape: torch.Size([2, 4])
+```
+
+What about “multiplying tensors” beyond matrices?
+
+- `@` and `torch.matmul` generalize matrix multiplication to batched dimensions.
+- The semantics are precise, but you need to know what dimensions are treated as batch vs matrix dimensions.
+- Later we will use `einsum` because it forces you to be explicit about index contractions.
+
+#### Logical ops and masking
+
+```python
+import torch
+
+x = torch.tensor([-2.0, -1.0, 0.0, 1.0, 2.0])
+mask = x > 0
+
+print("mask:", mask)
+print("x[mask]:", x[mask])
+
+# Output:
+# mask: tensor([False, False, False,  True,  True])
+# x[mask]: tensor([1., 2.])
+```
+
+#### Loss functions: `torch.nn.functional`
+
+PyTorch has common losses implemented and numerically stabilized.
+
+Two functions you should know exist:
+
+- `torch.logsumexp`,
+- `torch.nn.functional.cross_entropy` and `binary_cross_entropy_with_logits`.
+
+#### Logistic regression for spam vs not-spam (vectorized)
+
+We will write the whole “model + loss” in code.
+
+Setup:
+
+- data matrix $X \in \mathbb{R}^{n \times d}$,
+- labels $y \in \\{0,1\\}^n$,
+- parameter vector $w \in \mathbb{R}^d$,
+- logits $z = Xw$,
+- loss = binary cross entropy on logits.
+
+```python
+import torch
+import torch.nn.functional as F
+
+torch.manual_seed(0)
+
+n = 8
+d = 5
+
+X = torch.randn(n, d)
+y = torch.randint(low=0, high=2, size=(n,)).float()  # 0/1 labels
+
+w = torch.randn(d, requires_grad=True)
+
+logits = X @ w                      # shape (n,)
+loss = F.binary_cross_entropy_with_logits(logits, y)
+
+print("logits.shape:", logits.shape)
+print("loss:", loss.item())
+
+# Output:
+# logits.shape: torch.Size([8])
+# loss: ...
+```
+
+
+One thing you should note: We used `binary_cross_entropy_with_logits`, not “sigmoid then BCE.” The logits version is more numerically stable.
+
+
+#### `torch.nn`: a tiny two-layer network
+
+A linear model predicts with $x^\top w$. A neural network predicts with a nonlinear mapping.
+
+We will build:
+
+- Linear layer: $\mathbb{R}^d \to \mathbb{R}^h$,
+- ReLU,
+- Linear layer: $\mathbb{R}^h \to \mathbb{R}$.
+
+**Figure 3.3: two-layer network architecture.**  
+![Two-layer network](figures/two_layer_network.png)
+*Figure 3.3: A simple 2-layer MLP: linear layer, ReLU, linear layer. Later we will replace this with transformer blocks.*
+
+```python
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+torch.manual_seed(0)
+
+n = 8
+d = 5
+h = 16
+
+X = torch.randn(n, d)
+y = torch.randint(low=0, high=2, size=(n,)).float()
+
+model = nn.Sequential(
+    nn.Linear(d, h),
+    nn.ReLU(),
+    nn.Linear(h, 1),
+)
+
+logits = model(X).squeeze(1)     # shape (n,)
+loss = F.binary_cross_entropy_with_logits(logits, y)
+
+print("logits.shape:", logits.shape)
+print("loss:", loss.item())
+
+# Output:
+# logits.shape: torch.Size([8])
+# loss: ...
+```
+
+
+### 4.5 Computational graphs in higher dimensions
+
+We're going to go a bit more in-depth on gradient tracking. 
 
 #### `requires_grad`: turning tracking on
 
@@ -953,6 +1175,8 @@ print("grad:", w.grad)
 ```
 
 #### Why you “can’t just assign into” a leaf tensor requiring grad
+
+A **leaf tensor** is one that was created by you (not the result of an operation) and has `requires_grad=True`. It is the starting node that accumulates gradients in `.grad`.
 
 If `w` is a leaf tensor with `requires_grad=True`, in-place modifications can break the recorded computation.
 
@@ -1030,7 +1254,7 @@ This is useful and dangerous.
 Useful when:
 
 - you want a non-tracked view for logging,
-- you want to stop gradients from flowing into a subcomputation.
+- you want to stop gradient tracking for a subcomputation.
 
 Dangerous when:
 
@@ -1039,6 +1263,8 @@ Dangerous when:
 If you need a non-tracked copy that is safe to mutate, you want `detach().clone()`.
 
 #### `clone`: copy data (and usually preserve the graph)
+
+We revisit `clone()` here because now we care about autograd, not just storage. The key point: `clone()` copies the data but **preserves the computation graph** when the source is tracked.
 
 `clone()` makes a new tensor with its own storage.
 
@@ -1090,64 +1316,7 @@ Common patterns:
 
 - logging parameter snapshots during training,
 - exponential moving averages (EMA) of weights,
-- target networks in reinforcement learning,
-- computing a “target” value that should not backpropagate.
 
-### 4.5 Computing gradients in higher dimensions
-
-The “gradient computation pattern” is the same:
-
-1. build a scalar loss using PyTorch operations,
-2. call `backward()` on that scalar loss,
-3. read the gradient from `w.grad`.
-
-#### Inefficient demo: compute $L(w)=\tfrac{1}{2}\|\|w\|\|^2$ without `torch.sum`
-
-We do this inefficiently on purpose so you can see the mechanics.
-
-```python
-import torch
-
-w = torch.tensor([1.0, -2.0, 3.0], requires_grad=True)
-
-s = 0.0
-for j in range(w.numel()):
-    s = s + 0.5 * w[j] * w[j]
-
-s.backward()
-
-print("loss s:", s.item())
-print("grad:", w.grad)
-
-# Output:
-# loss s: 7.0
-# grad: tensor([ 1., -2.,  3.])
-```
-
-We got $\nabla L(w)=w$ as expected.
-
-Now the efficient version:
-
-```python
-import torch
-
-w = torch.tensor([1.0, -2.0, 3.0], requires_grad=True)
-
-L = 0.5 * (w * w).sum()
-L.backward()
-
-print("loss L:", L.item())
-print("grad:", w.grad)
-
-# Output:
-# loss L: 7.0
-# grad: tensor([ 1., -2.,  3.])
-```
-
-Same math, radically different execution.
-
-- the loop is Python-level and sequential,
-- the reduction is a PyTorch primitive that can be parallelized and optimized.
 
 #### Autodiff reminder: recorded operations + chain rule
 
@@ -1174,7 +1343,12 @@ One might think you can do:
 - compute a vector output,
 - call `backward()`.
 
-But a vector output does not have “the gradient” in the sense we need for optimization. It has a Jacobian.
+But a vector output does not have “the gradient” in the sense we need for optimization. It has a **Jacobian**.
+
+Definition: if $f:\mathbb{R}^d \to \mathbb{R}^m$, the Jacobian is the $m \times d$ matrix of partial derivatives
+$$
+J_{ij} = \frac{\partial f_i}{\partial x_j}.
+$$
 
 PyTorch resolves this by defaulting to **vector–Jacobian products**.
 
@@ -1199,26 +1373,7 @@ except RuntimeError as e:
 # backward failed: grad can be implicitly created only for scalar outputs
 ```
 
-Two standard fixes.
-
-**Fix A: reduce to a scalar loss**
-
-```python
-import torch
-
-w = torch.tensor([1.0, 2.0, 3.0], requires_grad=True)
-y = w * w
-
-L = y.sum()      # scalar
-L.backward()
-
-print("w.grad:", w.grad)
-
-# Output:
-# w.grad: tensor([2., 4., 6.])
-```
-
-**Fix B: provide `grad_outputs` to define a vector–Jacobian product**
+With `backward`, you can pass a vector `v` and get a Jacobian–vector product.
 
 ```python
 import torch
@@ -1235,269 +1390,15 @@ print("w.grad:", w.grad)
 # w.grad: tensor([ 20.,  80., 180.])
 ```
 
-Interpretation:
+Example (quadratic vector):
 
 - $y = (w_1^2,w_2^2,w_3^2)$ has Jacobian $J=\mathrm{diag}(2w_1,2w_2,2w_3)$,
 - `y.backward(v)` computes $J^\top v$,
 - here that is $(2w_1 v_1,2w_2 v_2,2w_3 v_3)$.
 
-In optimization, we almost always define a scalar loss, so Fix A is the default.
+### 4.7 Efficiency issues
 
-### 4.7 A larger tour of the PyTorch API
-
-This is not an exhaustive tour. It is a “things you will use constantly later” tour.
-
-#### Entrywise operations
-
-Any scalar function can be applied entrywise.
-
-```python
-import torch
-
-x = torch.tensor([1.0, 2.0, 3.0])
-
-print("exp:", torch.exp(x))
-print("log:", torch.log(x))
-print("sin:", torch.sin(x))
-print("x**2:", x**2)
-print("x*x:", x*x)
-
-# Output:
-# exp: tensor([ 2.7183,  7.3891, 20.0855])
-# log: tensor([0.0000, 0.6931, 1.0986])
-# sin: tensor([0.8415, 0.9093, 0.1411])
-# x**2: tensor([1., 4., 9.])
-# x*x: tensor([1., 4., 9.])
-```
-
-Two ways to square a vector (`x**2` vs `x*x`) are equivalent here.
-
-#### Reductions replace loops
-
-Reductions compute aggregates over dimensions.
-
-```python
-import torch
-
-A = torch.tensor([[1.0, 2.0],
-                  [3.0, 4.0]])
-
-print("sum all:", A.sum().item())
-print("sum dim=0:", A.sum(dim=0))
-print("sum dim=1:", A.sum(dim=1))
-print("mean:", A.mean().item())
-print("max:", A.max().item())
-print("argmax (flattened):", A.argmax().item())
-
-# Output:
-# sum all: 10.0
-# sum dim=0: tensor([4., 6.])
-# sum dim=1: tensor([3., 7.])
-# mean: 2.5
-# max: 4.0
-# argmax (flattened): 3
-```
-
-The “efficient norm-squared” example:
-
-```python
-import torch
-
-w = torch.randn(5, requires_grad=True)
-L = 0.5 * torch.sum(w * w)
-L.backward()
-
-print("L:", L.item())
-print("grad equals w?", torch.allclose(w.grad, w).item())
-
-# Output:
-# L: ...
-# grad equals w? True
-```
-
-#### Basic linear algebra
-
-```python
-import torch
-
-A = torch.tensor([[1.0, 2.0],
-                  [3.0, 4.0]])
-x = torch.tensor([10.0, 20.0])
-
-print("A.T:\n", A.t())
-print("A @ x:", (A @ x))
-print("x @ x:", (x @ x))   # inner product for 1D tensors
-
-# Output:
-# A.T:
-#  tensor([[1., 3.],
-#          [2., 4.]])
-# A @ x: tensor([ 50., 110.])
-# x @ x: tensor(500.)
-```
-
-Matrix-matrix multiplication:
-
-```python
-import torch
-
-A = torch.randn(2, 3)
-B = torch.randn(3, 4)
-C = A @ B
-
-print("C.shape:", C.shape)
-
-# Output:
-# C.shape: torch.Size([2, 4])
-```
-
-What about “multiplying tensors” beyond matrices?
-
-- `@` and `torch.matmul` generalize matrix multiplication to batched dimensions.
-- The semantics are precise, but you need to know what dimensions are treated as batch vs matrix dimensions.
-- Later we will use `einsum` because it forces you to be explicit about index contractions.
-
-#### Logical ops and masking
-
-```python
-import torch
-
-x = torch.tensor([-2.0, -1.0, 0.0, 1.0, 2.0])
-mask = x > 0
-
-print("mask:", mask)
-print("x[mask]:", x[mask])
-
-# Output:
-# mask: tensor([False, False, False,  True,  True])
-# x[mask]: tensor([1., 2.])
-```
-
-### 4.8 Loss functions: `torch.nn.functional`
-
-PyTorch has common losses implemented and numerically stabilized.
-
-Two functions you should know exist:
-
-- `torch.logsumexp` (stable softmax-ish primitive),
-- `torch.nn.functional.cross_entropy` and `binary_cross_entropy_with_logits`.
-
-#### Logistic regression for spam vs not-spam (vectorized)
-
-We will write the whole “model + loss” in code.
-
-Setup:
-
-- data matrix $X \in \mathbb{R}^{n \times d}$,
-- labels $y \in \{0,1\}^n$,
-- parameter vector $w \in \mathbb{R}^d$,
-- logits $z = Xw$,
-- loss = binary cross entropy on logits.
-
-```python
-import torch
-import torch.nn.functional as F
-
-torch.manual_seed(0)
-
-n = 8
-d = 5
-
-X = torch.randn(n, d)
-y = torch.randint(low=0, high=2, size=(n,)).float()  # 0/1 labels
-
-w = torch.randn(d, requires_grad=True)
-
-logits = X @ w                      # shape (n,)
-loss = F.binary_cross_entropy_with_logits(logits, y)
-
-loss.backward()
-
-print("logits.shape:", logits.shape)
-print("loss:", loss.item())
-print("w.grad.shape:", w.grad.shape)
-
-# Output:
-# logits.shape: torch.Size([8])
-# loss: ...
-# w.grad.shape: torch.Size([5])
-```
-
-This is the “data → model → loss → backward” pipeline in one place.
-
-Two notes you should file away:
-
-1. We used `binary_cross_entropy_with_logits`, not “sigmoid then BCE.”  
-   The logits version is more numerically stable.
-2. The gradient lives in `w.grad` because we marked `w` with `requires_grad=True`.
-
-### 4.9 `torch.nn`: a tiny two-layer network
-
-A linear model predicts with $x^\top w$. A neural network predicts with a nonlinear mapping.
-
-We will build:
-
-- Linear layer: $\mathbb{R}^d \to \mathbb{R}^h$,
-- ReLU,
-- Linear layer: $\mathbb{R}^h \to \mathbb{R}$.
-
-**Figure 3.3: two-layer network architecture.**  
-![Two-layer network](figures/two_layer_network.png)
-*Figure 3.3: A simple 2-layer MLP: linear layer, ReLU, linear layer. Later we will replace this with transformer blocks.*
-
-```python
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-
-torch.manual_seed(0)
-
-n = 8
-d = 5
-h = 16
-
-X = torch.randn(n, d)
-y = torch.randint(low=0, high=2, size=(n,)).float()
-
-model = nn.Sequential(
-    nn.Linear(d, h),
-    nn.ReLU(),
-    nn.Linear(h, 1),
-)
-
-logits = model(X).squeeze(1)     # shape (n,)
-loss = F.binary_cross_entropy_with_logits(logits, y)
-
-loss.backward()
-
-print("logits.shape:", logits.shape)
-print("loss:", loss.item())
-
-# Show that parameters have gradients
-for name, p in model.named_parameters():
-    print(name, "grad shape:", p.grad.shape)
-
-# Output:
-# logits.shape: torch.Size([8])
-# loss: ...
-# 0.weight grad shape: torch.Size([16, 5])
-# 0.bias grad shape: torch.Size([16])
-# 2.weight grad shape: torch.Size([1, 16])
-# 2.bias grad shape: torch.Size([1])
-```
-
-This is still the same pipeline:
-
-1. evaluate model (forward pass),
-2. compute loss,
-3. call `backward()` (backward pass),
-4. read gradients from parameters.
-
-Later we will add an optimizer (SGD, Adam, etc.) and run a loop.
-
-### 4.10 Efficiency issues: the same math, different runtime
-
-Throughout this section, the pattern is:
+Throughout this section, we will:
 
 - do the same computation two ways,
 - time them,
@@ -1507,9 +1408,12 @@ Timing is hardware-dependent. You should focus on the order-of-magnitude differe
 
 #### In-place operations: the `_` suffix
 
+An **in-place** operation writes its result into the existing tensor’s memory instead of allocating a new tensor.
+
 Many PyTorch operations have an in-place version with a trailing underscore.
 
 Example: `add_` modifies a tensor in place.
+
 
 ```python
 import torch
@@ -1543,7 +1447,13 @@ One might think “always use in-place for speed.” However:
 
 In training loops, the common safe in-place updates happen under `torch.no_grad()`.
 
+Finally, note that `x = x + y` is **out-of-place** (it allocates a new tensor and rebinds `x`).
+
 #### Broadcasting: matrix–vector Hadamard product
+
+Broadcasting is a rule that lets PyTorch align tensors with different shapes by “stretching” size‑1 dimensions, without allocating the repeated data.
+
+In this section we give a row‑wise example: a vector multiplies each row of a matrix (Hadamard product).
 
 We want to compute:
 
@@ -1594,13 +1504,13 @@ Why is broadcasting more efficient?
 
 #### Vectorization beats Python loops
 
-Python loops are slow. The reason is not that “Python is bad.” The reason is:
+Python loops are slow. The reason is:
 
-- each loop iteration is interpreted,
+- each loop iteration is interpreted, meaning Python executes each iteration step-by-step instead of a compiled kernel,
 - each tensor operation call has overhead,
 - you prevent PyTorch from launching efficient kernels over large blocks of data.
 
-A long timed example: compute $\sum_i x_i^2$.
+A long timed example: compute $\sum_i w_i^2$.
 
 ```python
 import time
@@ -1609,18 +1519,18 @@ import torch
 torch.manual_seed(0)
 
 n = 5_000_000
-x = torch.randn(n)
+w = torch.randn(n)
 
 # Python loop
 t0 = time.perf_counter()
 s = 0.0
 for i in range(n):
-    s += float(x[i] * x[i])
+    s += float(w[i] * w[i])
 t1 = time.perf_counter()
 
 # Vectorized
 t2 = time.perf_counter()
-s2 = torch.sum(x * x).item()
+s2 = torch.sum(w * w).item()
 t3 = time.perf_counter()
 
 print("loop sum:", s)
@@ -1640,43 +1550,56 @@ The numeric values differ slightly because:
 - the loop casts each term to Python float and accumulates in Python,
 - the vectorized reduction uses PyTorch’s reduction implementation and dtype rules.
 
-The runtime difference is the main point.
 
-#### Memory layout: contiguous vs non-contiguous
+#### How memory layout influences efficiency
 
-PyTorch tensors have **strides**, which describe how to step through memory to move along each dimension.
+A cache is small, fast memory near the CPU that holds recently accessed data. One might think memory layout is just bookkeeping. However, it changes which elements are neighbors in memory, which changes cache behavior.
 
-The default layout for a 2D tensor is “row-major contiguous” in the sense that the last dimension is contiguous.
+When the CPU loads a cache line into the cache, it brings nearby elements with it. For row-major data, “nearby” means adjacent columns in the same row. For column-major data, “nearby” means adjacent rows in the same column.
 
-Transpose changes the stride pattern without moving data.
+That means the same computation can run at different speeds depending on access order. To make this concrete, we sum the same row-major tensor in two ways: along rows (contiguous access) and along columns (strided access). We fix the number of rows and scale the number of columns so the stride gap grows. We average each timing over a few repeats to reduce noise.
 
 ```python
+import time
 import torch
+import matplotlib.pyplot as plt
 
-A = torch.arange(12).reshape(3, 4)
-AT = A.t()
+torch.set_num_threads(1)
 
-print("A.shape:", A.shape, "stride:", A.stride(), "contiguous:", A.is_contiguous())
-print("AT.shape:", AT.shape, "stride:", AT.stride(), "contiguous:", AT.is_contiguous())
+def time_sum(A, dim, repeats=3):
+    t0 = time.perf_counter()
+    for _ in range(repeats):
+        _ = torch.sum(A, dim=dim)
+    t1 = time.perf_counter()
+    return t1 - t0
 
-# Output:
-# A.shape: torch.Size([3, 4]) stride: (4, 1) contiguous: True
-# AT.shape: torch.Size([4, 3]) stride: (1, 4) contiguous: False
+rows = 512
+cols_list = [512, 1024, 2048, 4096, 8192, 16384, 32768]
+t_row, t_col = [], []
+
+for cols in cols_list:
+    A = torch.randn(rows, cols)
+    t_row.append(time_sum(A, dim=1))  # contiguous
+    t_col.append(time_sum(A, dim=0))  # strided
+
+plt.figure(figsize=(6.5, 4.0))
+plt.plot(cols_list, t_row, label="sum along rows (contiguous)")
+plt.plot(cols_list, t_col, label="sum along columns (strided)")
+plt.xlabel("columns m (512 x m)")
+plt.ylabel("time (seconds)")
+plt.title("Row-major tensor: row-sum vs column-sum")
+plt.grid(True, alpha=0.25)
+plt.legend()
+plt.tight_layout()
+plt.savefig("figures/memory_layout_efficiency.png", dpi=200, bbox_inches="tight")
 ```
 
-Why do we care?
+The row-major layout is faster because the inner loop hits contiguous memory. The column-major layout forces strided access and more cache misses.
 
-- contiguous layout enables fast sequential memory access,
-- non-contiguous layout can force extra copies when an operation expects contiguous data,
-- cache behavior is dominated by access patterns.
+This loop is intentionally slow to isolate the memory layout effect. In real code, you should use vectorized kernels.
 
-**Figure 3.5: row-major vs column-major intuition.**  
-![Row-major vs column-major memory layout](figures/memory_layout_row_vs_col.png)
-*Figure 3.5: A 2D array is stored in 1D memory. Row-major means row entries are contiguous. Column-major means column entries are contiguous. Strides are the precise way to describe both.*
-
-We will not do cache theory here. The actionable rule is:
-
-- if you see `is_contiguous()` is `False` and performance matters, consider making a contiguous copy with `.contiguous()` at an appropriate point.
+![Row-major loop time by memory layout](figures/memory_layout_efficiency.png)
+*Figure 3.7: Row-major access is faster on row-major data because the inner loop walks contiguous memory. On column-major data the same loop jumps by a stride and slows down as the matrix grows.*
 
 #### Matmul order: $A(BC)$ vs $(AB)C$
 
@@ -1737,7 +1660,7 @@ The outputs match (up to floating point), but runtime differs because you change
 
 One might think “PyTorch will figure this out automatically.” However, matrix multiplication order is not generally optimized away for you. You must choose the parentheses.
 
-### 4.11 Dtypes: precision, speed, and accumulation
+### 4.8 Dtypes: precision, speed, and accumulation
 
 PyTorch supports multiple numeric types.
 
@@ -1747,45 +1670,23 @@ Common ones:
 - integers: `int32`, `int64`,
 - booleans: `bool`.
 
-```python
-import torch
-
-print(torch.float16, torch.bfloat16, torch.float32, torch.float64)
-print(torch.int64, torch.bool)
-
-# Output:
-# torch.float16 torch.bfloat16 torch.float32 torch.float64
-# torch.int64 torch.bool
-```
 
 What does “precision” mean?
 
-- a float type has a limited number of bits to represent a number,
-- that means a limited set of representable values,
-- operations round to the nearest representable value.
+A floating-point number stores three fields: sign, exponent, and mantissa (significand). The exponent sets the scale (where the decimal point sits); the mantissa stores the significant digits. Different float types allocate bits differently.
 
-Benefits of lower precision:
+**Figure 3.8: floating-point bit layouts (sign, exponent, mantissa).**  
+![Floating-point bit layouts](figures/float_bit_layout.png)  
+*Figure 3.8: The exponent controls scale (range); the mantissa controls precision. bfloat16 keeps the float32 exponent width but fewer mantissa bits.*
 
-- less memory,
-- higher throughput on modern accelerators.
+Lower precision means fewer mantissa bits. That cuts memory and often increases throughput on modern accelerators, but it increases rounding error and can make some computations inaccurate.
 
-Drawback:
+When training large language models, it is common for a model to have many groups of parameters, and each group can use a different precision level.
 
-- you lose accuracy,
-- some computations become unstable.
-
-A practical rule of thumb:
-
-- **accumulators should usually be high precision.**  
-  If you add many small numbers, rounding error accumulates.
+Figuring out which precision is write for your problem is a matter of trial and error. One practical rule of thumb that always applies is to keep accumulators in high precision. What's an accumulator? It is a variable that holds a running sum (loss totals, gradient sums), and rounding error compounds there.
+  
 
 #### Accumulation exercise (float16 vs float32)
-
-This is the behavior I posted here:
-
-- <https://x.com/damekdavis/status/1952229626576830658?s=20>
-
-We can reproduce the key phenomenon in a few lines.
 
 ```python
 import torch
@@ -1833,15 +1734,9 @@ Interpretation:
 - `float16` accumulation loses additional information because the accumulator itself cannot represent intermediate sums finely.
 - `float32` accumulation avoids the accumulator-rounding issue, but you still sum the rounded `float16` values, so you can end up slightly high.
 
-Frontier practice (what modern training often does):
 
-- parameters stored in `bfloat16` or `float16`,
-- gradients and accumulators stored in `float32`,
-- mixed precision to trade memory/throughput vs stability.
 
-We will return to this when we talk about GPU training.
-
-### 4.12 Devices: CPU, GPU, MPS, TPU
+### 4.9 Devices: CPU, GPU, MPS, TPU
 
 By default, tensors live on CPU.
 
@@ -1855,7 +1750,7 @@ print("device:", x.device)
 # device: cpu
 ```
 
-You can move tensors to a device with `.to(device)`.
+You can move tensors to a device with `.to(device)`. In PyTorch, `cuda` is used to name NVIDIA GPUs (e.g., `cuda:0` for the first GPU).
 
 ```python
 import torch
@@ -1869,7 +1764,7 @@ print("device:", x.device)
 # device: cuda:0
 ```
 
-Macs may have an `mps` device. In my experience, MPS support is improving but can still be fragile depending on the operation mix. If you are on a Mac and you hit mysterious runtime errors, the first debugging step is often: run on CPU or on a CUDA machine.
+Newer Macs may have an `mps` device. In my experience, MPS support is fragile! If you are on a Mac and you hit mysterious runtime errors, the first debugging step is often: run on CPU or on a CUDA machine.
 
 ```python
 import torch
@@ -1888,47 +1783,16 @@ print("device:", x.device)
 
 Other devices exist (TPUs, etc.), typically via additional libraries (e.g., `torch_xla` in Colab). We will not rely on them in this course.
 
-If you want a concrete GPU mental model, see:
+We'll return to this later on in the course, but if you want a concrete GPU mental model, see:
 
 - <https://damek.github.io/random/basic-facts-about-gpus/>
 
-## 5. Conclusion
 
-What you should take from this lecture:
 
-1. The optimization definitions from 1D generalize directly to $\mathbb{R}^d$:
-   - $w$ becomes a vector,
-   - derivatives become gradients,
-   - convexity is defined by Jensen’s inequality,
-   - local minimizers and first-order / second-order conditions are standard vocabulary.
-
-2. The core diagnostics remain:
-   - objective values,
-   - gradient norms,
-   - plateau metrics like $|L(w_{k+1})-L(w_k)|$.
-
-3. The gradient descent derivation is still the local model:
-   - $L(w+\Delta) \approx L(w)+\nabla L(w)^\top \Delta$,
-   - the steepest descent direction (unit norm) is $-\nabla L(w)/\|\|\nabla L(w)\|\|$,
-   - the practical update is $w \leftarrow w - \eta \nabla L(w)$.
-
-4. PyTorch in higher dimensions is about:
-   - tensor creation and shape manipulation,
-   - understanding when an operation is a view vs a copy,
-   - understanding when a tensor shares storage (`detach`) vs allocates new memory (`clone`),
-   - writing scalar losses so `backward()` produces gradients for optimization.
-
-5. Performance is not magic:
-   - broadcasting beats explicit tiling,
-   - reductions beat Python loops,
-   - contiguity and matmul order matter,
-   - dtype choices can quietly change your results.
-
-Next lecture: we will start using these primitives to build larger training loops and more realistic models, where the “math object” is no longer a scalar function of a scalar, but a loss over a dataset and a parameter tensor.
 
 ## Appendix: prompts, scripts, and unit tests for figures in this lecture
 
-The lecture references Figures 3.1–3.6. This appendix gives agent prompts plus runnable scripts and tests.
+The lecture references Figures 3.1–3.7. This appendix gives agent prompts plus runnable scripts and tests.
 
 The intended workflow is:
 
@@ -2233,9 +2097,9 @@ def test_steepest_descent_unit_circle_png_exists_and_has_nontrivial_content():
     assert uniq.shape[0] >= 4
 ```
 
-### Figures 3.3–3.6
+### Figures 3.3–3.7
 
-For Figures 3.3–3.6 (network diagram, broadcasting diagram, memory layout diagram, matmul associativity diagram), the same workflow applies:
+For Figures 3.3–3.7 (network diagram, broadcasting diagram, memory layout diagram, matmul associativity diagram, memory layout efficiency plot), the same workflow applies:
 
 - write a deterministic script into `script/`,
 - save the image into `figures/`,
