@@ -250,13 +250,13 @@ In 1D, the derivative is a slope. In $d$ dimensions, the gradient is the object 
 Two equivalent facts that are both worth knowing:
 
 1. **The gradient is the coefficient vector in the best local linear approximation.**
-2. **The gradient is normal to level sets** (and, equivalently, normal to the tangent plane of the graph in the right embedding).
+2. **The gradient is normal to the tangent plane of the graph** (equivalently, normal to level sets).
 
-In practice, the “normal to level sets” picture is usually the most useful.
+We will use the tangent-plane picture because it makes the linear approximation explicit: for $z=f(x)$, the tangent plane at $x$ has normal $(\nabla f(x), -1)$.
 
-**Figure 3.1: gradient is orthogonal to level sets.**  
-![Gradient is orthogonal to level sets](figures/grad_is_normal_to_level_sets.png)
-*Figure 3.1: A contour plot of a 2D loss with the gradient vector drawn at a point. The gradient is perpendicular to the contour line (level set) through that point.*
+**Figure 3.1: gradient as the normal to the tangent plane of the graph.**  
+![Gradient and tangent plane](figures/tangent_plane.png)
+*Figure 3.1: For $f(x)=\|\|x\|\|^2/2$, the tangent plane gives the first-order approximation; the normal vector is $(\nabla f(x), -1)$.*
 
 #### The first-order Taylor model
 
@@ -1802,7 +1802,7 @@ The intended workflow is:
 4. Run `pytest` to sanity-check the file exists and the figure has basic expected structure.
 5. Open the image and confirm it matches the description in the prompt.
 
-### Figure 3.1: gradient is normal to level sets
+### Figure 3.1: gradient as normal to the tangent plane of the graph
 
 **Target output path:** `figures/grad_is_normal_to_level_sets.png`  
 **Script path:** `script/fig_grad_normal_to_level_sets.py`  
@@ -1814,25 +1814,19 @@ The intended workflow is:
 Create a script that generates Figure 3.1.
 
 Figure content requirements:
-- Use a 2D loss L(x,y) = x^2 + 0.2*y^2 (elliptical contours).
-- Make a contour plot with several level sets (at least 8 contours).
-- Pick a point w0 = (1.0, 1.0).
-- Compute grad at w0: grad = (2x, 0.4y) evaluated at w0.
-- Draw:
-  1) a dot at w0 labeled "w"
-  2) an arrow at w0 in the gradient direction labeled "∇L(w)"
-  3) a short arrow tangent to the contour through w0 labeled "tangent"
-- Make it visually obvious the gradient arrow is perpendicular to the contour at that point:
-  - place the tangent arrow along the contour direction
-  - place the gradient arrow crossing the contour
+- Plot the surface z = f(x,y) = (x^2 + y^2)/2.
+- Pick a point x0 = (1.0, 1.0) and compute ∇f(x0).
+- Draw the tangent plane at x0: z = f(x0) + ∇f(x0)ᵀ(x - x0).
+- Draw the normal vector at x0 with direction (∇f(x0), -1).
+- Mark the point and label the tangent plane and the normal.
 
 Implementation requirements:
 - Save the plot to figures/grad_is_normal_to_level_sets.png
 - Put code in script/fig_grad_normal_to_level_sets.py
 - Use only matplotlib + numpy (no seaborn).
-- Use a fixed grid and deterministic rendering (no randomness).
-- Set a reasonable figure size so labels are readable (e.g., figsize around (6,4)).
-- Include axis labels "x" and "y" and a short title.
+- Use 3D axes (projection="3d") with a fixed grid and deterministic rendering.
+- Set a reasonable figure size so labels are readable (e.g., figsize around (7,5)).
+- Include axis labels "x", "y", "z" and a short title.
 
 Testing requirements:
 - Write tests/test_fig_grad_normal_to_level_sets.py using pytest.
@@ -1843,9 +1837,10 @@ Testing requirements:
   - assert the image is not blank: pixel variance must be above a small threshold
   - assert the image has 3 color channels (RGB or RGBA)
 - After generating, open the image and visually confirm:
-  - contours are elliptical
-  - gradient arrow is perpendicular to a contour
-  - the w point and both arrows are labeled clearly
+  - the surface is a paraboloid
+  - the tangent plane touches at x0
+  - the normal vector points out of the plane
+  - labels are readable
 If anything is unclear, iterate until it matches the description exactly.
 ```
 
@@ -1859,68 +1854,61 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 
-def L(x, y):
-    return x**2 + 0.2 * y**2
-
-
-def grad_L(x, y):
-    return np.array([2.0 * x, 0.4 * y])
-
-
 def main():
-    # Grid
-    xs = np.linspace(-2.0, 2.0, 400)
-    ys = np.linspace(-2.0, 2.0, 400)
+    def f(x, y):
+        return 0.5 * (x**2 + y**2)
+
+    # Surface grid
+    xs = np.linspace(-2.0, 2.0, 80)
+    ys = np.linspace(-2.0, 2.0, 80)
     X, Y = np.meshgrid(xs, ys)
-    Z = L(X, Y)
+    Z = f(X, Y)
 
-    # Point and gradient
-    w0 = np.array([1.0, 1.0])
-    g0 = grad_L(w0[0], w0[1])
+    # Point, gradient, and normal
+    x0, y0 = 0.8, 0.8
+    z0 = f(x0, y0)
+    grad = np.array([x0, y0])
+    normal = np.array([grad[0], grad[1], -1.0])
 
-    # A tangent direction to the level set is any vector orthogonal to grad.
-    # One simple choice in 2D: rotate grad by +90 degrees.
-    t0 = np.array([-g0[1], g0[0]])
-    t0 = t0 / np.linalg.norm(t0)
+    # Tangent plane patch
+    span = 1.1
+    xp = np.linspace(x0 - span, x0 + span, 20)
+    yp = np.linspace(y0 - span, y0 + span, 20)
+    Xp, Yp = np.meshgrid(xp, yp)
+    Zp = z0 + grad[0] * (Xp - x0) + grad[1] * (Yp - y0)
 
-    # Normalize arrows so lengths are readable on the plot.
-    g_dir = g0 / np.linalg.norm(g0)
-    g_len = 0.6
-    t_len = 0.6
+    fig = plt.figure(figsize=(7.0, 4.6))
+    ax = fig.add_subplot(111, projection="3d")
+    ax.plot_surface(X, Y, Z, cmap="Blues", alpha=0.6, linewidth=0)
+    ax.plot_surface(Xp, Yp, Zp, color="#fdae61", alpha=0.55, edgecolor="k", linewidth=0.3)
 
-    plt.figure(figsize=(6.5, 4.2))
-    levels = np.linspace(Z.min() + 0.2, Z.max() - 0.2, 10)
-    cs = plt.contour(X, Y, Z, levels=levels)
-    plt.clabel(cs, inline=True, fontsize=8)
+    ax.scatter([x0], [y0], [z0], color="black", s=40)
+    ax.text(x0 + 0.1, y0 + 0.1, z0 + 0.1, "point")
 
-    plt.scatter([w0[0]], [w0[1]], s=60)
-    plt.text(w0[0] + 0.05, w0[1] + 0.05, "w")
-
-    plt.arrow(
-        w0[0],
-        w0[1],
-        g_len * g_dir[0],
-        g_len * g_dir[1],
-        length_includes_head=True,
-        head_width=0.08,
+    ax.quiver(
+        x0,
+        y0,
+        z0,
+        normal[0],
+        normal[1],
+        normal[2],
+        length=0.8,
+        normalize=True,
+        color="crimson",
+        arrow_length_ratio=0.12,
     )
-    plt.text(w0[0] + g_len * g_dir[0] + 0.05, w0[1] + g_len * g_dir[1] + 0.05, "∇L(w)")
+    ax.text2D(0.5, 0.55, "normal (∇f(x), -1)", transform=ax.transAxes, color="crimson")
+    ax.text(x0 - 1.0, y0 - 0.9, z0 - 0.4, "tangent plane", color="#8c2d04")
 
-    plt.arrow(
-        w0[0],
-        w0[1],
-        t_len * t0[0],
-        t_len * t0[1],
-        length_includes_head=True,
-        head_width=0.08,
-    )
-    plt.text(w0[0] + t_len * t0[0] + 0.05, w0[1] + t_len * t0[1] + 0.05, "tangent")
-
-    plt.xlabel("x")
-    plt.ylabel("y")
-    plt.title("Gradient is orthogonal to level sets")
-    plt.axis("equal")
-    plt.grid(True, alpha=0.25)
+    ax.set_xlabel("x")
+    ax.set_ylabel("y")
+    ax.set_zlabel("z")
+    ax.set_xlim(-2, 2)
+    ax.set_ylim(-2, 2)
+    ax.set_zlim(0, 4)
+    ax.set_box_aspect((1, 1, 0.7))
+    ax.view_init(elev=25, azim=35)
+    ax.set_title("Gradient as normal to the tangent plane of the graph")
 
     outpath = "figures/grad_is_normal_to_level_sets.png"
     os.makedirs(os.path.dirname(outpath), exist_ok=True)
