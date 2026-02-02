@@ -37,27 +37,22 @@ This lecture has three goals.
    - we cannot monitor iterates directly in any meaningful way once $d$ is large.
 
 2. **Set up a usable dev environment that you can ship and reproduce.**  
-   In class: I will live-demo how I code with Cursor and how I use an AI agent responsibly.  
+   In class: I will live-demo how I code with Cursor and how I use an AI agent.  
    In these notes: we will set up `uv` so you can run course scripts locally or on a remote VM.
 
 3. **Do a higher-dimensional tour of PyTorch.**  
    We will touch the pieces we will use constantly later:
 
    - creating and manipulating tensors,
-   - how autodiff behaves in higher dimensions,
    - a larger API surface: reductions, linear algebra, loss functions, `torch.nn`,
+   - how autodiff behaves in higher dimensions,
    - efficiency: broadcasting, vectorization, memory layout, matmul order,
    - dtypes and device placement.
 
-If you leave this lecture with one usable mental model, it is this:
-
-- the math in $d$ dimensions is the same as 1D, but written with vectors and inner products,
-- PyTorch is a linear algebra DSL with autodiff attached,
-- performance depends on whether you let PyTorch do the work in parallel, or you force it to crawl through Python loops.
 
 ## 2. Optimization in higher dimensions: definitions and diagnostics
 
-This section is a fast lift-and-shift from Lecture 1 and Lecture 2.
+This section is a fast restatement of the beginning material of Lecture 1.
 
 ### 2.1 Optimization problems, loss functions, minimizers
 
@@ -156,60 +151,6 @@ So for convex problems, “solve” often means “find a point with small gradi
 
 For nonconvex problems, small gradients can happen far from a minimizer (saddles, flat regions, etc.). The diagnostic interpretation is weaker.
 
-### 2.5 Local minimizers and optimality conditions
-
-In nonconvex problems, global minimizers may be hard to find or hard to even define operationally. So we often talk about **local** minima.
-
-A point $w^\ast$ is a **local minimizer** of $L$ if there exists a radius $r>0$ such that
-
-$$
-L(w^\ast) \le L(w)
-\quad \text{for all } w \text{ with } \|w-w^\ast\|\le r.
-$$
-
-If you have not seen “balls” before, the only object you need is the norm. The set
-
-$$
-\{w \in \mathbb{R}^d : \|w-w^\ast\|\le r\}
-$$
-
-is the Euclidean ball of radius $r$ centered at $w^\ast$.
-
-A useful reframing:
-
-- $w^\ast$ is a local minimizer of $L$  
-  if and only if  
-  $w^\ast$ is a global minimizer of the constrained problem
-
-$$
-\min_{w:\|w-w^\ast\|\le r} L(w)
-$$
-
-for some radius $r>0$.
-
-This is not a deep theorem. It is just a clean way to see that “local” means “global, but with a local constraint.”
-
-#### First-order necessary condition
-
-If $L$ is differentiable and $w^\ast$ is a local minimizer of the **unconstrained** problem, then
-
-$$
-\nabla L(w^\ast)=0.
-$$
-
-This is a **necessary** condition, not a sufficient one. Stationary points include local minima, local maxima, and saddle points.
-
-#### Second-order conditions (twice differentiable case)
-
-If $L$ is twice differentiable, it has a **Hessian matrix** $\nabla^2 L(w)$, the matrix of second partial derivatives.
-
-- **Second-order necessary condition:** if $w^\ast$ is a local minimizer, then $\nabla^2 L(w^\ast)$ is positive semidefinite.
-- **Second-order sufficient condition:** if $\nabla L(w^\ast)=0$ and $\nabla^2 L(w^\ast)$ is positive definite, then $w^\ast$ is a strict local minimizer.
-
-We will not do Hessian-based algorithms yet. The point of saying this now is vocabulary:
-
-- “local minimizer” is a geometric concept,
-- “first-order / second-order necessary and sufficient conditions” are how you turn that geometry into checkable statements.
 
 ### 2.6 Diagnostics in higher dimensions
 
