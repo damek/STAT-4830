@@ -23,36 +23,16 @@ In practice, the parameter is almost never a scalar. It is a vector, or a matrix
 
 This lecture has three goals.
 
-1. **Lift the optimization primitives from 1D to $d$ dimensions.**  
-   What stays the same:
+First, we lift the optimization primitives from 1D to $d$ dimensions. Everything is essentially the same. For example, An optimization problem is still defined by a decision variables, an objective, and constraints. We can still motivatve gradient descent from a local linear model. And we use the same diagnostics. What changes is the geometry: $w$ is now a vector $w \in \mathbb{R}^d$ and derivatives become **gradients** (vectors of partial derivatives).
 
-   - an optimization problem is still decision variables + objective + constraints,
-   - gradient descent is still derived from a local linear model,
-   - diagnostics are still about “is the method making progress and is it stable?”
+Second, we set up a usable dev environment that you can ship and reproduce. In class I will live-demo how I code with Cursor and how I use an AI agent. In these notes we set up `uv` so you can run course scripts locally or on a remote VM.
 
-   What changes:
-
-   - $w$ is now a vector $w \in \mathbb{R}^d$,
-   - derivatives become **gradients** (vectors of partial derivatives),
-   - we cannot monitor iterates directly in any meaningful way once $d$ is large.
-
-2. **Set up a usable dev environment that you can ship and reproduce.**  
-   In class: I will live-demo how I code with Cursor and how I use an AI agent.  
-   In these notes: we will set up `uv` so you can run course scripts locally or on a remote VM.
-
-3. **Do a higher-dimensional tour of PyTorch.**  
-   We will touch the pieces we will use constantly later:
-
-   - creating and manipulating tensors,
-   - a larger API surface: reductions, linear algebra, loss functions, `torch.nn`,
-   - how autodiff behaves in higher dimensions,
-   - efficiency: broadcasting, vectorization, memory layout, matmul order,
-   - dtypes and device placement.
+Third, we do a higher-dimensional tour of PyTorch. We focus on the aspects we will use later: creating and manipulating tensors, a larger part of the API (reductions, linear algebra, loss functions, `torch.nn`), how autodiff behaves in higher dimensions, efficiency (broadcasting, vectorization, memory layout, matmul order), and dtypes/device placement.
 
 
 ## 2. Optimization in higher dimensions: definitions and diagnostics
 
-This section is a fast restatement of the beginning material of Lecture 1.
+This section is a fast restatement in higher dimensions of the beginning material of Lecture 1.
 
 ### 2.1 Optimization problems, loss functions, minimizers
 
