@@ -5,15 +5,14 @@ title: Optimization and PyTorch basics in higher dimensions
 
 # 3. Optimization and PyTorch basics in higher dimensions
 
-[cheatsheet](cheatsheet.html)
+[cheatsheet](cheatsheet.html) | [live demo (colab)](https://colab.research.google.com/github/damek/STAT-4830/blob/main/section/3/live-demo.ipynb)
 
 ## Table of contents
 1. [Goal of this lecture](#1-goal-of-this-lecture)
 2. [Optimization in higher dimensions: definitions and diagnostics](#2-optimization-in-higher-dimensions-definitions-and-diagnostics)
 3. [Dev environment: Cursor and uv](#3-dev-environment-cursor-and-uv)
 4. [PyTorch tour: tensors, graphs, operations, efficiency, dtypes, devices](#4-pytorch-tour-tensors-graphs-operations-efficiency-dtypes-devices)
-5. [Conclusion](#5-conclusion)
-6. [Appendix: prompts, scripts, and unit tests for figures](#appendix-prompts-scripts-and-unit-tests-for-figures)
+5. [Appendix: prompts, scripts, and unit tests for figures](#appendix-prompts-scripts-and-unit-tests-for-figures)
 
 ## 1. Goal of this lecture
 
@@ -371,6 +370,7 @@ These are the packages needed to run the code in this section:
 - `numpy`
 - `matplotlib`
 - `pytest`
+- `jupyter`
 
 ```text
 You are in the root of a git repository.
@@ -396,6 +396,7 @@ Requirements:
    - matplotlib
    - numpy
    - pytest
+   - jupyter
 
 4) Create an install script at:
    script/install.sh
@@ -1203,13 +1204,14 @@ Dangerous when:
 
 If you need a non-tracked copy that is safe to mutate, you want `detach().clone()`.
 
-#### `clone`: copy data (and usually preserve the graph)
+#### `clone`: copy data
 
 We revisit `clone()` here because now we care about autograd, not just storage. The key point: `clone()` copies the data but **preserves the computation graph** when the source is tracked.
 
 `clone()` makes a new tensor with its own storage.
 
 If you clone a tracked tensor, the clone is still connected to the graph (it is not a leaf).
+Because it is non-leaf, its `.grad` is not populated by default; gradients accumulate on the original leaf unless you call `retain_grad()` on the clone.
 
 ```python
 import torch
@@ -1231,7 +1233,7 @@ print("w.grad:", w.grad)
 # w.grad: tensor([...])
 ```
 
-So `clone()` is a data copy, but not a “stop gradient.”
+So `clone()` is a data copy, but not a “stop gradient,” meaning gradients still flow back through it.
 
 If you want a copy that is disconnected from the graph:
 
@@ -1337,7 +1339,82 @@ Example (quadratic vector):
 - `y.backward(v)` computes $J^\top v$,
 - here that is $(2w_1 v_1,2w_2 v_2,2w_3 v_3)$.
 
-### 4.7 Efficiency issues
+### 4.7 Dtypes: precision, speed, and accumulation
+
+PyTorch supports multiple numeric types.
+
+Common ones:
+
+- floating point: `float16`, `bfloat16`, `float32`, `float64`,
+- integers: `int32`, `int64`,
+- booleans: `bool`.
+
+
+What does “precision” mean?
+
+A floating-point number stores three fields: sign, exponent, and mantissa (significand). The exponent sets the scale (where the decimal point sits); the mantissa stores the significant digits. Different float types allocate bits differently.
+
+**Figure 3.8: floating-point bit layouts (sign, exponent, mantissa).**  
+![Floating-point bit layouts](figures/float_bit_layout.png)  
+*Figure 3.8: The exponent controls scale (range); the mantissa controls precision. bfloat16 keeps the float32 exponent width but fewer mantissa bits.*
+
+Lower precision means fewer mantissa bits. That cuts memory and often increases throughput on modern accelerators, but it increases rounding error and can make some computations inaccurate.
+
+When training large language models, it is common for a model to have many groups of parameters, and each group can use a different precision level.
+
+Figuring out which precision is write for your problem is a matter of trial and error. One practical rule of thumb that always applies is to keep accumulators in high precision. What's an accumulator? It is a variable that holds a running sum (loss totals, gradient sums), and rounding error compounds there.
+  
+
+#### Accumulation exercise (float16 vs float32)
+
+```python
+import torch
+
+# 1000 copies of ~0.01 should sum to ~10.
+n = 1000
+vals32 = torch.full((n,), 0.0100001, dtype=torch.float32)
+vals16 = vals32.to(torch.float16)
+
+# float32 accumulator + float32 values
+acc32_32 = torch.tensor(0.0, dtype=torch.float32)
+for v in vals32:
+    acc32_32 = acc32_32 + v
+
+# float16 accumulator + float16 values
+acc16_16 = torch.tensor(0.0, dtype=torch.float16)
+for v in vals16:
+    acc16_16 = acc16_16 + v
+
+# float32 accumulator + float16 values (implicit upcast of v during addition)
+acc32_16 = torch.tensor(0.0, dtype=torch.float32)
+for v in vals16:
+    acc32_16 = acc32_16 + v
+
+# float32 accumulator + float16 values (explicit upcast)
+acc32_16_explicit = torch.tensor(0.0, dtype=torch.float32)
+for v in vals16:
+    acc32_16_explicit = acc32_16_explicit + v.to(torch.float32)
+
+print("float32 accumulator + float32 values:", acc32_32)
+print("float16 accumulator + float16 values:", acc16_16)
+print("float32 accumulator + float16 values (implicit upcast):", acc32_16)
+print("float32 accumulator + float16 values (explicit upcast):", acc32_16_explicit)
+
+# Output:
+# float32 accumulator + float32 values: tensor(10.0001)
+# float16 accumulator + float16 values: tensor(9.9531, dtype=torch.float16)
+# float32 accumulator + float16 values (implicit upcast): tensor(10.0021)
+# float32 accumulator + float16 values (explicit upcast): tensor(10.0021)
+```
+
+Interpretation:
+
+- `float16` cannot represent `0.0100001` exactly; it rounds it.
+- `float16` accumulation loses additional information because the accumulator itself cannot represent intermediate sums finely.
+- `float32` accumulation avoids the accumulator-rounding issue, but you still sum the rounded `float16` values, so you can end up slightly high.
+
+
+### 4.8 Efficiency issues
 
 Throughout this section, we will:
 
@@ -1563,7 +1640,7 @@ The difference can be huge.
 ![Matmul associativity cost](figures/matmul_associativity_cost.png)
 *Figure 3.6: The intermediate matrix in $(AB)C$ has shape $m \times p$. The intermediate in $A(BC)$ has shape $n \times q$. You want the smaller intermediate when possible.*
 
-A concrete timing example:
+A concrete timing example (average over 3 runs):
 
 ```python
 import time
@@ -1571,111 +1648,38 @@ import torch
 
 torch.manual_seed(0)
 
-m, n, p, q = 512, 2048, 64, 512
+m, n, p, q = 512, 512, 8, 512
 
 A = torch.randn(m, n)
 B = torch.randn(n, p)
 C = torch.randn(p, q)
 
-# Time (AB)C
-t0 = time.perf_counter()
-X1 = (A @ B) @ C
-t1 = time.perf_counter()
+def avg_time(fn, repeats=3):
+    times = []
+    out = None
+    for _ in range(repeats):
+        t0 = time.perf_counter()
+        out = fn()
+        t1 = time.perf_counter()
+        times.append(t1 - t0)
+    return sum(times) / len(times), out
 
-# Time A(BC)
-t2 = time.perf_counter()
-X2 = A @ (B @ C)
-t3 = time.perf_counter()
+t_ab, X1 = avg_time(lambda: (A @ B) @ C, repeats=3)
+t_bc, X2 = avg_time(lambda: A @ (B @ C), repeats=3)
 
 print("max diff:", (X1 - X2).abs().max().item())
-print("(AB)C time (s):", t1 - t0)
-print("A(BC) time (s):", t3 - t2)
+print("avg (AB)C time (s):", t_ab)
+print("avg A(BC) time (s):", t_bc)
 
 # Example output (your times will differ):
 # max diff: 0.0
-# (AB)C time (s): 0.45
-# A(BC) time (s): 0.08
+# avg (AB)C time (s): 0.03
+# avg A(BC) time (s): 0.35
 ```
 
 The outputs match (up to floating point), but runtime differs because you changed the cost profile.
 
 One might think “PyTorch will figure this out automatically.” However, matrix multiplication order is not generally optimized away for you. You must choose the parentheses.
-
-### 4.8 Dtypes: precision, speed, and accumulation
-
-PyTorch supports multiple numeric types.
-
-Common ones:
-
-- floating point: `float16`, `bfloat16`, `float32`, `float64`,
-- integers: `int32`, `int64`,
-- booleans: `bool`.
-
-
-What does “precision” mean?
-
-A floating-point number stores three fields: sign, exponent, and mantissa (significand). The exponent sets the scale (where the decimal point sits); the mantissa stores the significant digits. Different float types allocate bits differently.
-
-**Figure 3.8: floating-point bit layouts (sign, exponent, mantissa).**  
-![Floating-point bit layouts](figures/float_bit_layout.png)  
-*Figure 3.8: The exponent controls scale (range); the mantissa controls precision. bfloat16 keeps the float32 exponent width but fewer mantissa bits.*
-
-Lower precision means fewer mantissa bits. That cuts memory and often increases throughput on modern accelerators, but it increases rounding error and can make some computations inaccurate.
-
-When training large language models, it is common for a model to have many groups of parameters, and each group can use a different precision level.
-
-Figuring out which precision is write for your problem is a matter of trial and error. One practical rule of thumb that always applies is to keep accumulators in high precision. What's an accumulator? It is a variable that holds a running sum (loss totals, gradient sums), and rounding error compounds there.
-  
-
-#### Accumulation exercise (float16 vs float32)
-
-```python
-import torch
-
-# 1000 copies of ~0.01 should sum to ~10.
-n = 1000
-vals32 = torch.full((n,), 0.0100001, dtype=torch.float32)
-vals16 = vals32.to(torch.float16)
-
-# float32 accumulator + float32 values
-acc32_32 = torch.tensor(0.0, dtype=torch.float32)
-for v in vals32:
-    acc32_32 = acc32_32 + v
-
-# float16 accumulator + float16 values
-acc16_16 = torch.tensor(0.0, dtype=torch.float16)
-for v in vals16:
-    acc16_16 = acc16_16 + v
-
-# float32 accumulator + float16 values (implicit upcast of v during addition)
-acc32_16 = torch.tensor(0.0, dtype=torch.float32)
-for v in vals16:
-    acc32_16 = acc32_16 + v
-
-# float32 accumulator + float16 values (explicit upcast)
-acc32_16_explicit = torch.tensor(0.0, dtype=torch.float32)
-for v in vals16:
-    acc32_16_explicit = acc32_16_explicit + v.to(torch.float32)
-
-print("float32 accumulator + float32 values:", acc32_32)
-print("float16 accumulator + float16 values:", acc16_16)
-print("float32 accumulator + float16 values (implicit upcast):", acc32_16)
-print("float32 accumulator + float16 values (explicit upcast):", acc32_16_explicit)
-
-# Output:
-# float32 accumulator + float32 values: tensor(10.0001)
-# float16 accumulator + float16 values: tensor(9.9531, dtype=torch.float16)
-# float32 accumulator + float16 values (implicit upcast): tensor(10.0021)
-# float32 accumulator + float16 values (explicit upcast): tensor(10.0021)
-```
-
-Interpretation:
-
-- `float16` cannot represent `0.0100001` exactly; it rounds it.
-- `float16` accumulation loses additional information because the accumulator itself cannot represent intermediate sums finely.
-- `float32` accumulation avoids the accumulator-rounding issue, but you still sum the rounded `float16` values, so you can end up slightly high.
-
-
 
 ### 4.9 Devices: CPU, GPU, MPS, TPU
 

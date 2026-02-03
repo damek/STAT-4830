@@ -18,7 +18,7 @@ title: Table of Contents
 [2. Stochastic Optimization Basics in 1D](section/2/notes.md) 
    > Empirical risk, SGD updates, step-size schedules, noise floors, unbiasedness and variance, minibatches, and validation diagnostics.
 
-[3. Optimization and PyTorch basics in higher dimensions](section/3/notes.md)
+[3. Optimization and PyTorch basics in higher dimensions](section/3/notes.md) | [Live demo](https://colab.research.google.com/github/damek/STAT-4830/blob/main/section/3/live-demo.ipynb)
   > Lift optimization to $\mathbb{R}^d$, derive gradient descent from the local model, and tour PyTorch tensors, efficiency, dtypes, and devices.
 
 ---
