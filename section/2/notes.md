@@ -95,7 +95,7 @@ $$
 \min_{w \in \mathbb{R}} L(w).
 $$
 
-This is the same empirical-risk objective as in the previous lecture; the new issue is scale.
+This is the same sort of problem we spoke about in the previous lecture. The new issue is scale.
 
 If we run full-batch gradient descent, we need the derivative of the average loss,
 
@@ -105,7 +105,7 @@ $$
 
 The cost of computing $L'(w)$ scales linearly with $n$, because you must touch all $n$ samples.
 
-For modern language models, $n$ can be on the order of trillions. Even a single full gradient can be too expensive. This is where stochastic gradient methods enter.
+For modern language models, $n$ can be on the order of trillions. Even evaluating a single full gradient can be too expensive. This is where stochastic gradient methods enter.
 
 ## 3. SGD: replace a full gradient with a sample gradient
 
@@ -119,7 +119,12 @@ $$
 w_{k+1} = w_k - \eta\,\ell_{i_k}'(w_k).
 $$
 
-### Sampling a random index in PyTorch
+Clearly, there is a dramatic cost difference between using all samples and using a single sample:
+
+* Full-batch GD: one step costs $n$ sample-gradients.
+* SGD (batch size 1): one step costs 1 sample-gradient.
+
+Now, before moving onto some plots, let's quickly introduce the only new PyTorch used in this lecture: sampling a random index.
 
 If your dataset has length `n` and you want a random index in `{0,1,...,n-1}`:
 
@@ -133,12 +138,7 @@ A minibatch of size `B` (sampling with replacement) is:
 idx = torch.randint(low=0, high=n, size=(B,))
 ```
 
-The computational point is immediate.
-
-* Full-batch GD: one step costs $n$ sample-gradients.
-* SGD (batch size 1): one step costs 1 sample-gradient.
-
-The question is whether this cheaper update still makes progress.
+The first natural question to ask is whether this cheaper update still makes progress.
 
 ## 4. Experiment: 1D linear regression with noisy labels
 
