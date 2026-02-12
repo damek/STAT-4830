@@ -356,7 +356,7 @@ These are the packages needed to run the code in this section:
 ```text
 You are in the root of a git repository.
 
-Your goal: make this repo runnable by a new user on a fresh machine using uv.
+Goal: make this repo runnable on macOS/Linux/Windows using uv.
 
 Requirements:
 1) Create directories:
@@ -379,20 +379,24 @@ Requirements:
    - pytest
    - jupyter
 
-4) Create an install script at:
-   script/install.sh
+4) Create installer scripts:
+   - script/install.sh (macOS/Linux, runnable via: bash script/install.sh)
+   - script/install.ps1 (Windows PowerShell, runnable via:
+     powershell -ExecutionPolicy Bypass -File .\script\install.ps1)
 
-   install.sh must:
-   - be runnable on Linux/macOS with: bash script/install.sh
-   - check whether uv is installed; if not, install uv (use the official install script)
-   - create a venv named .venv in the repo root (do not pick another name)
-   - install requirements into that venv using uv
-   - print clear next steps to the user (how to activate the venv and run the script)
+   Both scripts must:
+   - check whether uv is installed
+   - if missing, install uv using official Astral install command for that OS
+   - create .venv in the repo root
+   - install requirements from requirements.txt into .venv via uv
+   - print next steps to run script and tests
 
 5) Make script/install.sh executable.
 
 6) Create a README.md that explains:
-   - how to run script/install.sh
+   - macOS/Linux quickstart
+   - Windows PowerShell quickstart
+   - how to run each install command
    - how to activate the venv
    - how to run script/gd_1d_torch.py
    - how to run tests
@@ -401,15 +405,18 @@ Requirements:
    tests/test_install_and_run.py
 
    The test must:
-   - import subprocess
-   - run: .venv/bin/python script/gd_1d_torch.py (assume venv exists)
+   - import os, pathlib, subprocess
+   - choose venv python path as:
+     - .venv/Scripts/python.exe on Windows
+     - .venv/bin/python otherwise
+   - run script/gd_1d_torch.py with that interpreter (assume venv exists)
    - assert that figures/gd_torch_quadratic_diagnostics.png exists after running
    - do NOT check timing, only that the script runs and produces the figure
 
 Finally:
-- Run script/install.sh.
+- Run only the installer for the current OS.
 - Run pytest.
-- If anything fails, fix it and rerun until both succeed.
+- If anything fails, fix it and rerun until passing.
 ```
 
 #### Notes on why we do this

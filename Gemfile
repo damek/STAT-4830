@@ -1,4 +1,11 @@
 source "https://rubygems.org"
 
-gem "github-pages", group: :jekyll_plugins
+gem "jekyll", "~> 3.9.0"
+gem "jekyll-seo-tag"
 gem "jekyll-theme-minimal"
+gem "jekyll-relative-links"
+gem "kramdown-parser-gfm"
+gem "webrick"
+gem "csv"
+gem "base64"
+gem "bigdecimal"

@@ -8,5 +8,11 @@ repository: damek/STAT-4830
 # Build settings
 markdown: kramdown
 theme: jekyll-theme-minimal
+safe: false
 plugins:
   - jekyll-seo-tag
+  - jekyll-relative-links
+
+relative_links:
+  enabled: true
+  collections: true
