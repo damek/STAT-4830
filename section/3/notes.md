@@ -315,9 +315,24 @@ A venv is the minimum mechanism that makes Python reproducible.
 
 Below is the basic workflow we will use.
 
-1. Create a venv in the repo (often `.venv/`).
-2. Install packages into that venv.
-3. Run scripts using the venv Python.
+1. Install `uv` once per machine.
+2. Create a venv in the repo (often `.venv/`).
+3. Install packages into that venv.
+4. Run scripts using the venv Python.
+
+Install `uv` (first time only):
+
+Linux/macOS:
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+Windows (PowerShell):
+
+```powershell
+irm https://astral.sh/uv/install.ps1 | iex
+```
 
 A typical sequence (Linux/macOS):
 
@@ -335,6 +350,20 @@ uv venv
 .\.venv\Scripts\Activate.ps1
 uv pip install torch matplotlib numpy
 python .\script\gd_1d_torch.py
+```
+
+If your environment gets into a bad state, delete `.venv` and recreate it:
+
+Linux/macOS:
+
+```bash
+rm -rf .venv
+```
+
+Windows (PowerShell):
+
+```powershell
+Remove-Item -Recurse -Force .venv
 ```
 
 We will automate most of this so you can clone a repo and run a single install command.
