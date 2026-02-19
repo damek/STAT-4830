@@ -1031,12 +1031,48 @@ print("x[mask]:", x[mask])
 
 #### Loss functions: `torch.nn.functional`
 
-PyTorch has common losses implemented and numerically stabilized.
+PyTorch has common losses implemented in numerically stable form.
 
-Two functions you should know exist:
+Pick the loss based on what you are predicting:
 
-- `torch.logsumexp`,
-- `torch.nn.functional.cross_entropy` and `binary_cross_entropy_with_logits`.
+- regression (real-valued targets),
+- classification (label targets).
+
+For regression, a common choice is mean squared error:
+
+$$
+\ell_{\mathrm{MSE}}(\hat y,y) = (\hat y - y)^2,
+$$
+
+and in practice we average this over the batch.
+
+`torch.nn.functional.mse_loss(\hat y, y)`.
+
+For classification, models usually output raw scores called **logits**.
+A logit is a score before converting to a probability.
+
+For binary classification (yes/no), let $z \in \mathbb{R}$ and $y \in \{0,1\}$:
+
+$$
+\ell_{\mathrm{BCE-logits}}(z,y) = -\left(y\log\sigma(z) + (1-y)\log(1-\sigma(z))\right), \quad \sigma(z)=\frac{1}{1+e^{-z}}.
+$$
+
+`binary_cross_entropy_with_logits(z, y)` takes one logit per target (also used for multi-label tasks).
+
+For multiclass classification (one correct class out of $C$), let $z \in \mathbb{R}^C$ and class index $y$:
+
+$$
+\ell_{\mathrm{CE}}(z,y) = -\log\frac{e^{z_y}}{\sum_{j=1}^C e^{z_j}}.
+$$
+
+`torch.nn.functional.cross_entropy(z, y)` takes the full vector of class logits.
+
+Difference in use:
+
+- `cross_entropy`: one label out of $C$ classes (mutually exclusive classes),
+- `binary_cross_entropy_with_logits`: yes/no decision(s), independent across labels.
+
+Both classification losses above take logits (raw scores), not probabilities and not log-probabilities.
 
 #### Logistic regression for spam vs not-spam (vectorized)
 
