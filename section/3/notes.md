@@ -895,11 +895,18 @@ import torch
 A = torch.zeros(2, 3)
 v = torch.tensor([1.0, 2.0, 3.0])
 
+
+try:
+    A1 = torch.cat([A, v], dim=0)
+except RuntimeError as e:
+    print("concat failed:", e)
+
 A2 = torch.cat([A, v.unsqueeze(0)], dim=0)
 print("A2.shape:", A2.shape)
 print(A2)
 
 # Output:
+# concat failed: Tensors must have same number of dimensions: got 2 and 1
 # A2.shape: torch.Size([3, 3])
 # tensor([[0., 0., 0.],
 #         [0., 0., 0.],
@@ -908,7 +915,7 @@ print(A2)
 
 ### 4.4 A larger tour of the PyTorch API
 
-This is not an exhaustive tour. It is a “things you will use constantly later” tour.
+This is a short tour of things you will use constantly.
 
 #### Entrywise operations
 
