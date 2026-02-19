@@ -774,13 +774,19 @@ A standard way to make a non-contiguous tensor is transpose.
 ```python
 import torch
 
-A = torch.arange(12).reshape(3, 4)
-AT = A.t()   # transpose: shape (4,3)
+x = torch.arange(12)
+A = x.view(3, 4)   # standalone view example (x is contiguous)
+AT = A.t()         # transpose: shape (4,3)
 
+print("A from view:\n", A)
 print("A.is_contiguous():", A.is_contiguous())
 print("AT.is_contiguous():", AT.is_contiguous())
 
 # Output:
+# A from view:
+#  tensor([[ 0,  1,  2,  3],
+#          [ 4,  5,  6,  7],
+#          [ 8,  9, 10, 11]])
 # A.is_contiguous(): True
 # AT.is_contiguous(): False
 ```
