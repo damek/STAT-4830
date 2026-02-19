@@ -1418,17 +1418,56 @@ Common ones:
 
 What does “precision” mean?
 
-A floating-point number stores three fields: sign, exponent, and mantissa (significand). The exponent sets the scale (where the decimal point sits); the mantissa stores the significant digits. Different float types allocate bits differently.
+A floating-point number stores three fields: sign, exponent, and mantissa (significand). For standard binary floating point, a normal nonzero number is represented as
+
+$$
+x = (-1)^s\,(1.f)_2\,2^{E-\text{bias}},
+$$
+
+where $s\in\{0,1\}$ is the sign bit, $E$ is the stored exponent field, and $(1.f)_2$ is the significand from the mantissa bits.
+
+Here $f$ means the fraction bits after the binary point:
+
+$$
+(1.f)_2 = 1 + \sum_{i=1}^m f_i 2^{-i}.
+$$
+
+If the exponent field has $k$ bits, the stored exponent is an unsigned integer
+
+$$
+E = \sum_{i=0}^{k-1} b_i 2^i, \qquad E\in\{0,\dots,2^k-1\}.
+$$
+
+For normal numbers, the true exponent is
+
+$$
+e = E-\text{bias}, \qquad \text{bias}=2^{k-1}-1.
+$$
+
+So the exponent is base-2 (a power of 2), not base-10. (Example: in float32, exponent bits `10000001` mean $E=129$, so $e=129-127=2$.)
+
+Special exponent values are reserved: $E=0$ encodes zero/subnormals, and $E=2^k-1$ encodes inf/NaN.
+
+Different float types allocate these bits differently.
 
 **Figure 3.8: floating-point bit layouts (sign, exponent, mantissa).**  
 ![Floating-point bit layouts](figures/float_bit_layout.png)  
 *Figure 3.8: The exponent controls scale (range); the mantissa controls precision. bfloat16 keeps the float32 exponent width but fewer mantissa bits.*
 
-Lower precision means fewer mantissa bits. That cuts memory and often increases throughput on modern accelerators, but it increases rounding error and can make some computations inaccurate.
+Lower precision means fewer mantissa bits: less memory and often more speed, but more rounding error.
 
-When training large language models, it is common for a model to have many groups of parameters, and each group can use a different precision level.
+In practice, you choose precision by testing on your model and hardware.
 
-Figuring out which precision is write for your problem is a matter of trial and error. One practical rule of thumb that always applies is to keep accumulators in high precision. What's an accumulator? It is a variable that holds a running sum (loss totals, gradient sums), and rounding error compounds there.
+Practical tradeoff (`float16` vs `bfloat16`):
+
+- both are 16-bit formats, so they use less memory and often run faster than `float32`,
+- `float16`: more mantissa bits, fewer exponent bits -> better local precision, smaller range,
+- `bfloat16`: fewer mantissa bits, more exponent bits (same exponent width as `float32`) -> lower precision, much wider range.
+
+For many large-model training setups, `bfloat16` works better in practice because the wider range leads to fewer overflow/underflow issues.
+Use `float16` when hardware is optimized for it and your value ranges are well controlled.
+
+Rule of thumb: keep accumulators (running sums like loss/gradient totals and optimizer states) in `float32`.
   
 
 #### Accumulation exercise (float16 vs float32)
