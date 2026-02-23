@@ -21,9 +21,9 @@ title: Loss functions and models for regression and classification problems
 
 ## 1. Purpose: formulating machine learning problems
 
-This lecture is about turning "I have data and I want predictions" into a concrete optimization problem you can implement and train.
+This lecture is about turning a task in which you have data and need predictions into an optimization problem.
 
-We build the problem in stages. Start with **data**: pairs $(x_i, y_i)$ where $x_i$ is an input (a feature vector, an image, a signal) and $y_i$ is a target. The target space depends on the problem -- real numbers for regression, class labels for classification.
+We build the problem in stages. Start with **data**: pairs $(x_i, y_i)$ where $x_i$ is an input (a feature vector, an image, a signal) and $y_i$ is a target. The target space depends on the problem, real numbers for regression, class labels for classification.
 
 Next, choose a **model**: a parameterized map $m(\cdot\,; w)$ from inputs to predictions. The parameters $w$ are what we will optimize. In a linear model, $w$ is a single vector; in a neural network, $w$ collects all the weights and biases across every layer.
 
@@ -35,13 +35,13 @@ $$
 
 When we minimize this, we get a predictor. 
 
-Often we know (or suspect) something about $w$ -- for instance, that it should be sparse. We can encode this as a **constraint** (a hard rule on $w$) or a **regularizer** (a penalty added to $L$):
+Often we know (or suspect) something about $w$, for instance, that it should be sparse. We can encode this as a **constraint** (a hard rule on $w$) or a **regularizer** (a penalty added to $L$):
 
 $$
 \min_w \; L(w) + \lambda R(w).
 $$
 
-Constraints and regularizers can also simplify models and improve generalization, but this lecture is about **formulation** and **implementation**, not generalization theory.
+Constraints and regularizers can also simplify models and improve generalization. This lecture is only about **formulation** and **implementation**, so we will not discuss generalization theory.
 
 The full pipeline:
 
