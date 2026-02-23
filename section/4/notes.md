@@ -1,548 +1,762 @@
 ---
 layout: course_page
-title: How to compute gradients in PyTorch
+title: Loss functions and models for regression and classification problems
 ---
 
-# How to compute gradients in PyTorch
+# 4. Loss functions and models for regression and classification problems
 
-## Notebooks and Slides
-- [Lecture slides](slides.pdf)
-- [Colab notebook](https://colab.research.google.com/github/damek/STAT-4830/blob/main/section/4/notebook.ipynb)
+[cheatsheet](cheatsheet.html)
 
 ## Table of contents
-1. [Introduction](#introduction)
-2. [Computing Gradients of Loss Functions](#computing-gradients-of-loss-functions)
-3. [Applying Gradient Descent to Least Squares](#applying-gradient-descent-to-least-squares)
-4. [More Complex Loss Functions: Building Neural Networks](#more-complex-loss-functions-building-neural-networks)
+1. [Purpose: formulating machine learning problems](#1-purpose-formulating-machine-learning-problems)
+2. [Example: linear models + sparsity + logistic regression](#2-example-linear-models--sparsity--logistic-regression)
+3. [Getting started with models in PyTorch](#3-getting-started-with-models-in-pytorch)
+4. [Convolution layers as linear maps with weight sharing](#4-convolution-layers-as-linear-maps-with-weight-sharing)
+5. [Introducing `torch.nn.Module` (the standard model container)](#5-introducing-torchnnmodule-the-standard-model-container)
+6. [Putting it together: the training loop](#6-putting-it-together-the-training-loop)
+7. [Conclusion](#7-conclusion)
+8. [Appendix: prompts, scripts, and unit tests for figures](#appendix-prompts-scripts-and-unit-tests-for-figures)
 
-## Introduction
+---
 
-In our previous lecture, we explored gradient descent for minimizing the least squares objective. We saw how following the negative gradient leads us to the optimal solution, even for large-scale problems where direct methods fail. But least squares is just one example of a loss function. Modern machine learning employs many loss functions, each designed for specific tasks: cross-entropy for classification, Huber loss for robust regression, contrastive loss for similarity learning.
+## 1. Purpose: formulating machine learning problems
 
-PyTorch provides a powerful system for computing gradients of any differentiable function built from its operations. This capability forms the foundation of modern deep learning, enabling automatic computation of gradients for complex neural networks. In this lecture, we examine how PyTorch's automatic differentiation system works, starting with simple one-dimensional examples and building up to neural networks. We'll see how the same principles that let us optimize least squares problems extend naturally to more complex settings.
+This lecture is about turning "I have data and I want predictions" into a concrete optimization problem you can implement and train.
 
-## Computing Gradients of Loss Functions
+We build the problem in stages. Start with **data**: pairs $(x_i, y_i)$ where $x_i$ is an input (a feature vector, an image, a signal) and $y_i$ is a target. The target space depends on the problem -- real numbers for regression, class labels for classification.
 
-Let's start with the simplest possible case: computing the gradient of a one-dimensional function. Consider the polynomial:
+Next, choose a **model**: a parameterized map $m(\cdot\,; w)$ from inputs to predictions. The parameters $w$ are what we will optimize. In a linear model, $w$ is a single vector; in a neural network, $w$ collects all the weights and biases across every layer.
 
-$$ f(x) = x^3 - 3x $$
+Then choose a **loss function** $\ell(\widehat{y}, y)$ that scores how bad a prediction $\widehat{y}$ is when the true target is $y$. Composing data, model, and loss gives us the training objective:
 
-This function has an analytical gradient:
+$$
+L(w) = \frac{1}{n}\sum_{i=1}^n \ell\big(m(x_i; w),\; y_i\big).
+$$
 
-$$ \frac{d}{dx}f(x) = 3x^2 - 3 $$
+When we minimize this, we get a predictor. 
 
-While we can compute this derivative by hand, PyTorch offers a powerful alternative - automatic differentiation. Here's how you use it.
+Often we know (or suspect) something about $w$ -- for instance, that it should be sparse. We can encode this as a **constraint** (a hard rule on $w$) or a **regularizer** (a penalty added to $L$):
+
+$$
+\min_w \; L(w) + \lambda R(w).
+$$
+
+Constraints and regularizers can also simplify models and improve generalization, but this lecture is about **formulation** and **implementation**, not generalization theory.
+
+The full pipeline:
+
+**Data $\rightarrow$ Model $\rightarrow$ Loss + regularizers/constraints $\rightarrow$ training algorithm (e.g., gradient descent) $\rightarrow$ deploy**
+
+We will now work through each stage with concrete examples.
+
+---
+
+## 2. Example: linear models + sparsity + logistic regression
+
+Let's start with the simplest possible model:
+
+$$
+m(x; w) = w^T x.
+$$
+
+It is a good first model to fit to data because it is simple and interpretable, and it gives you a baseline on which you can try to improve.
+
+### 2.1 Regression: $y \in \mathbb{R}$
+
+Suppose $x_i \in \mathbb{R}^d$ and $y_i \in \mathbb{R}$. Since the target is real-valued, this is a **regression** problem.
+
+Model: $m(x; w) = w^T x$. Loss (squared):
+
+$$
+\ell(\widehat{y}, y) = (\widehat{y} - y)^2.
+$$
+
+![Quadratic loss curve](figures/quadratic_loss_curve.png)
+
+*Quadratic loss as a function of residual $r=\widehat{y}-y$. It is symmetric around $r=0$ and grows quadratically as errors get larger.*
+
+Composing data, model, and loss:
+
+$$
+L(w) = \frac{1}{n}\sum_{i=1}^n (w^T x_i - y_i)^2.
+$$
+
+This is exactly the pipeline **Data $\rightarrow$ model $\rightarrow$ loss** written as one objective in $w$. Minimize $L(w)$ and you have a predictor.
+
+### 2.2 Sparsity: when you believe $w_\star$ has many zeros
+
+What if you know more about $w_\star$? Suppose you suspect it is **sparse** -- most coordinates are zero.
+
+A natural first thought: constrain $w$ to have at most $s$ nonzero entries. Clean mathematical statement, but two immediate problems:
+1. The feasible set is **nonconvex**.
+2. We have not built the machinery for gradient-based methods with such constraints.
+
+So we take a different approach.
+
+#### 2.2.1 $\|w\|_0$ regularization (the idea, and why it breaks gradient descent)
+
+Define the $\|w\|_0$ "norm" (not actually a norm):
+
+$$
+\|w\|_0 = \sum_{j=1}^d \mathbf{1}(w_j \neq 0).
+$$
+
+Then consider
+
+$$
+\min_w \; L(w) + \lambda \|w\|_0.
+$$
+
+This encodes exactly what we want: penalize the number of nonzeros. Unfortunately, $\|w\|_0$ is combinatorial, what should the derivative of $\mathbf{1}(w_j \neq 0)$ be? PyTorch gradients are useless here.
+
+Convex optimization gives us a way to relax this.
+
+#### 2.2.2 Convex envelope: replace $\|x\|_0$ by something convex
+
+In 1D, $\|\|x\|\|_0$ is $0$ at $x=0$ and $1$ elsewhere. On $[-1,1]$, the function $\lvert x\rvert$ sits below $\|\|x\|\|_0$, and one can show it is the **largest convex function** lying below $\|x\|_0$ on that interval. This largest convex lower bound is called the **convex envelope**.
+
+![](figures/l0_vs_l1_convex_envelope.png)
+
+*Figure 2.1: On $[-1,1]$, $\|x\|_0$ is $0$ at the origin and $1$ elsewhere. The function $\lvert x\rvert$ is the largest convex function that stays below $\|x\|_0$ on $[-1,1]$ (the convex envelope on that interval). The dashed lines mark $x=\pm 1$.*
+
+This motivates the $\ell_1$ regularizer.
+
+#### 2.2.3 $\ell_1$ regularization and the Lasso
+
+Define $R\_{\ell\_1}(w) = \|\|w\|\|_1 = \sum\_{j=1}^d \lvert w\_j\rvert$. The regularized objective becomes
+
+$$
+\min_w \; \frac{1}{n}\sum_{i=1}^n (w^T x_i - y_i)^2 + \lambda \|w\|_1.
+$$
+
+This is the **Lasso**. It is convex, and as $\lambda$ increases the solution becomes sparser. In practice we do not know the right $\lambda$ in advance -- we choose it by tuning against validation performance. That is important, but not the main point of this lecture.
+
+### 2.3 Binary classification: $y$ is a label, not a number
+
+Now let's take a step back. Suppose the target is not a real number but a class label, with two classes $C_1$ and $C_2$.
+
+We still use the same model: $m(x; w) = w^T x$. But the output is a real number, and $C_1$, $C_2$ are categorical. It does not make literal sense to demand $w^T x \approx C_1$, since $C_1$ could be a character string.
+
+One workaround: encode $C_1 \mapsto 1$, $C_2 \mapsto -1$, and fit by squared loss. This can work, but it is not the natural loss for classification.
+
+#### 2.3.1 Logistic loss
+
+Let $y \in \\{-1, 1\\}$ and define a score $a = w^T x$. The logistic loss is:
+
+$$
+\ell(a, y) = \log\big(1+\exp(-ya)\big).
+$$
+
+![Logistic loss curve](figures/logistic_loss_curve.png)
+
+*Logistic loss as a function of margin $m=ya$. Positive margin (correct sign) drives the loss toward $0$; negative margin incurs much larger loss.*
+
+When $y$ and $a$ have the same sign, $ya > 0$, so $\exp(-ya)$ is small and the loss is small. When they disagree, $ya < 0$ and the loss is large. Correct sign means low loss; wrong sign means high loss.
+
+#### 2.3.2 Probabilistic interpretation and MLE
+
+Define the sigmoid $\operatorname{sigmoid}(t) = 1/(1+\exp(-t))$ and a conditional probability
+
+$$
+P_w(y\mid x) = \operatorname{sigmoid}(y\, w^T x).
+$$
+
+We will take this quantity to be the model's confidence that it assigned the correct label.
+
+Now watch what happens when we take logs. Maximizing the log-likelihood of i.i.d. data means maximizing
+
+$$
+\sum_{i=1}^n \log P_w(y_i \mid x_i).
+$$
+
+Equivalently, minimizing the negative log-likelihood:
+
+$$
+-\frac{1}{n}\sum_{i=1}^n \log P_w(y_i \mid x_i).
+$$
+
+Using $\log(\operatorname{sigmoid}(t)) = -\log(1+\exp(-t))$, each term becomes
+
+$$
+-\log P_w(y_i\mid x_i) = \log\big(1+\exp(-y_i w^T x_i)\big),
+$$
+
+which is exactly the logistic loss. The logistic loss *is* maximum likelihood estimation:
+
+$$
+\arg\max_w \sum_{i=1}^n \log P_w(y_i\mid x_i)
+\;\Longleftrightarrow\;
+\arg\max_w \prod_{i=1}^n P_w(y_i\mid x_i),
+$$
+
+since log is monotone and we model the data as i.i.d. under $w$. You choose $w$ to maximize the likelihood of the observed labels under a simple probabilistic model.
+
+#### 2.3.3 Sparse logistic regression
+
+Just like in regression, you can add an $\ell_1$ regularizer:
+
+$$
+\min_w \; \frac{1}{n}\sum_{i=1}^n \log\big(1+\exp(-y_i w^T x_i)\big) + \lambda \|w\|_1.
+$$
+
+This encourages sparse classifiers.
+
+### 2.4 PyTorch implementation
+
+Everything above is easy to implement directly in PyTorch, without any `torch.nn` machinery. Store data in a matrix $X$ of shape `(batch_size, d)` with one sample per row, define a parameter vector $w$, and compute predictions as $Xw$.
 
 ```python
 import torch
 
-# Create input tensor with gradient tracking
-x = torch.tensor([1.0], requires_grad=True)
+torch.manual_seed(0)
 
-# Define the function
-def f(x):
-    return x**3 - 3*x
+n, d = 6, 4
+X = torch.randn(n, d)
 
-# Forward pass: evaluating the function
-y = f(x)
+y_reg = torch.randn(n)                        # regression targets
+y_cls = 2 * torch.randint(0, 2, (n,)) - 1     # binary labels in {+1, -1}
 
-# Backward pass: computing the gradient
-y.backward()
+w = torch.randn(d)
+logits = X @ w                                 # shape (n,)
 
-print(f"At x = {x.item():.1f}")
-print(f"f(x) = {y.item():.1f}")
-print(f"f'(x) = {x.grad.item():.1f}")  # Should be 3(1)² - 3 = 0
+# Squared loss
+mse_loss = ((logits - y_reg) ** 2).mean()
+
+# Logistic loss (torch.logaddexp for numerical stability)
+logistic_loss = torch.logaddexp(torch.zeros_like(logits), -y_cls * logits).mean()
+
+# L1 regularizer
+l1 = w.abs().sum()
+lam = 0.1
+
+print("X.shape:", X.shape)                     # (6, 4)
+print("logits.shape:", logits.shape)            # (6,)
+print("mse_loss:", mse_loss.item())
+print("logistic_loss:", logistic_loss.item())
+print("mse + lam*l1:", (mse_loss + lam * l1).item())
+print("logistic + lam*l1:", (logistic_loss + lam * l1).item())
 ```
 
-This simple example reveals the key components of automatic differentiation:
+That concludes the linear-model example. Next we move to richer models built by composing linear maps and nonlinearities -- neural networks. In the next lecture, we will start on modern generative models (e.g., transformers), which are built from these same components.
 
-1. **Gradient Tracking**: We mark tensors that need gradients with `requires_grad=True`
-2. **Forward Pass**: PyTorch automatically records operations as we compute the function 
-3. **Backward Pass**: The `backward()` call computes gradients through the recorded operations
-4. **Gradient Access**: The computed gradient is stored in the `.grad` attribute
+---
 
+## 3. Getting started with models in PyTorch
 
-Let's visualize how the analytic gradient and the gradient computed by PyTorch match up:
+The model output shape and interpretation usually dictates the loss: scalar real output leads to regression losses (MSE), logits for classes lead to classification losses (logistic, cross-entropy). Generative models like transformers, which we cover next lecture, compose the same primitives we introduce here.
 
-![Polynomial and Gradient](figures/polynomial_gradient.png)
-The top plot shows our function $f(x) = x^3 - 3x$, while the bottom plot compares PyTorch's computed gradient (red solid line) with the analytical gradient $3x^2 - 3$ (green dashed line). They match perfectly, confirming that PyTorch computes exact gradients. To understand how PyTorch achieves this precision, we need to examine the machinery that powers its automatic differentiation system.
+### 3.1 Models are compositions of simple maps
 
-### The Computational Graph
+Most neural networks are built from three ingredients:
+1. linear maps (affine transformations)
+2. simple nonlinearities (applied componentwise)
+3. repetition / composition
 
-To understand how PyTorch computes these gradients, we need to examine the computational graph it builds during the **forward pass:**
+![A model as a composition of layers](figures/model_as_composition.png)
 
-![Computational Graph](figures/polynomial_computation.png)
+*Figure 3.1: The same input batch flows through successive transformations: linear map $\rightarrow$ nonlinearity $\rightarrow$ linear map. The representation changes dimension across layers (from $(n,d_0)$ to $(n,d_1)$ to $(n,d_2)$), while the batch dimension $n$ is preserved.*
 
-The computational graph is a directed acyclic graph (DAG) where nodes represent operations and edges represent data flow. Each node stores:
+Common nonlinearities you will see often:
+- ReLU
+- GELU
+- SiLU (also called "Swish")
 
-- Its output value computed during the forward pass
-- A function to compute local gradients (derivatives with respect to its inputs)
+![Common nonlinearities](figures/nonlinearities.png)
 
-Each node in this graph represents an operation:
-1. Input node stores our value $x$
-2. Power node computes $z_1 = x^3$
-3. Multiply node computes $z_2 = -3x$
-4. Add node combines terms to form $f(x) = z_1 + z_2$
+*Figure 3.2: Typical activation functions. ReLU is exactly $0$ for negative inputs. GELU and SiLU are smooth and do not "hard clip" negative values.*
 
-During the forward pass, PyTorch, records each operation in sequence, stores intermediate values, and maintains references between operations.
+### 3.2 PyTorch's model toolbox (`torch.nn`)
 
-During the **backward pass**, PyTorch uses an efficient implementation of the *chain rule* that processes these nodes in reverse dependency order - what's called a *reverse topological sort*. This means we start at the output and only process a node after we've handled all the nodes that depend on its result. 
+PyTorch provides standard building blocks through `torch.nn`:
 
-More specifically, to compute $\frac{\partial f}{\partial x}$ for output $f$ with respect to input $x$, we go through the following process:
+- linear maps: `torch.nn.Linear`
+- convolutions: `torch.nn.Conv1d`, `torch.nn.Conv2d`, `torch.nn.Conv3d`
+- containers: `torch.nn.Module`
 
-**Starting State:**
-- Initialize gradient at output node to 1 ($\frac{\partial f}{\partial f} = 1$)
-- All other gradient accumulators start at $0$
-
-**Algorithm:** The system performs a reverse topological sort traversal of the graph. At each node:
-
-- Compute local gradients using stored forward-pass values
-- Multiply incoming gradient by local gradient (chain rule)
-- Add result to gradient accumulators of input nodes
-
-For the polynomial $f(x) = x^3 - 3x$, this process looks like this:
-
-**Output Node ($f = z_1 + z_2$):**
-- $\frac{\partial f}{\partial f} = 1$
-- Local gradients: $\frac{\partial f}{\partial z_1} = 1$, $\frac{\partial f}{\partial z_2} = 1$
-- Propagate to $z_1$, $z_2$ nodes: $\frac{\partial f}{\partial z_1} = 1$, $\frac{\partial f}{\partial z_2} = 1$
-
-**Power Node ($z_1 = x^3$):**
-- Incoming gradient: 1
-- Local gradient: $\frac{\partial z_1}{\partial x} = 3x^2$
-- Contribute to x's gradient accumulator: $\frac{\partial f}{\partial x} \mathrel{+}= (1)(3x^2)$
-
-**Multiply Node ($z_2 = -3x$):**
-- Incoming gradient: 1
-- Local gradient: $\frac{\partial z_2}{\partial x} = -3$
-- Contribute to x's gradient accumulator: $\frac{\partial f}{\partial x} \mathrel{+}= (1)(-3)$
-
-**Input Node ($x$):** [accumulation needed because x has two outgoing edges]
-- Accumulated gradients from both paths: $3x^2$ and $-3$
-- Final gradient (sum of all paths): $\frac{\partial f}{\partial x} = 3x^2 - 3$
-
-From this example, it should be clear that the algorithm is completely mechanical - each node only needs to know its local gradient function, and the graph structure determines where accumulation is needed (at nodes with multiple outgoing edges). The memory complexity is O(n) where n is the number of nodes, as we store one gradient accumulator per node. The time complexity is also O(n) as we visit each node exactly once and perform a fixed amount of work per node.
-
-While we state this result for a one function of a single variable, it should be clear that it generalizes. For example, to handle multiple inputs, we track separate gradient accumulators for each input. For vector-valued functions, gradients become Jacobian matrices. Higher derivatives can be computed by applying the same process to the gradient computation graph.
-
-**Important Requirement:** This graph structure explains a crucial requirement: we can only compute gradients through operations that PyTorch implements. The framework needs to know both (1) how to compute the operation (forward pass) and (2) how to compute its derivative (backward pass). Common operations like addition (`+`), multiplication (`*`), and power (`**`) are all implemented by PyTorch. Even when we use Python's standard operators, we're actually calling PyTorch's overloaded versions that know how to handle both computation and differentiation.
-
-### Two Methods for Gradient Computation: `backward()` and `autograd.grad()`
-
-PyTorch provides two ways to compute gradients, each designed for different use cases. Let's see how they work using our polynomial example:
+We chain layers and nonlinearities together inside a `torch.nn.Module`. Here is a preview:
 
 ```python
-# Our familiar polynomial f(x) = x³ - 3x
-x = torch.tensor([1.0], requires_grad=True)
-z1 = x**3           # First intermediate value
-z2 = -3*x          # Second intermediate value
-f = z1 + z2        # Final output
+class TwoLayerNet(torch.nn.Module):
+    def __init__(self, d0, d1, d2):
+        super().__init__()
+        self.layer1 = torch.nn.Linear(d0, d1)
+        self.layer2 = torch.nn.Linear(d1, d2)
+
+    def forward(self, X):
+        return self.layer2(torch.relu(self.layer1(X)))
 ```
 
-During this forward pass, PyTorch builds a computational graph dynamically. Each operation adds nodes and edges to the graph, tracking how values flow through the computation. The graph in our visualization shows exactly this process - from input x through intermediate values z₁ and z₂ to the final output f.
+We will explain `Module` in detail in Section 5. First we need to understand what the individual layers do and how shapes move through them.
 
-The standard method uses `backward()`:
+### 3.3 Linear models and `torch.nn.Linear`
+
+**Goal:** represent a linear model $m(x; w, b) = w^T x + b$ in PyTorch.
+
+#### 3.3.1 Batch-first convention and `torch.nn.Linear`
+
+In PyTorch, a batch of vectors is stored as a matrix $X$ of shape `(batch_size, input_features)`, with each row being one sample:
+
+$$
+X = \begin{bmatrix}
+x_1^T \\
+x_2^T \\
+\vdots \\
+x_n^T
+\end{bmatrix}.
+$$
+
+This convention is not optional. Internalize it early.
+
+A `torch.nn.Linear(d, k)` layer maps `(n, d)` to `(n, k)`:
+
 ```python
-f.backward()        # Compute gradient
-print(x.grad)       # Access gradient through .grad attribute
+m = torch.nn.Linear(in_features=d, out_features=k, bias=True)
 ```
 
-When you call `backward()`, PyTorch (1) creates a new graph for the gradient computation, (2) computes gradients by flowing backward through this graph, (3) stores results in the `.grad` attributes of input tensors, and (4) discards both graphs to free memory.
+#### 3.3.2 Weight storage and the transpose
 
-You can inspect intermediate values during computation:
-```python
-print(z1.data)      # See value of x³
-print(z2.data)      # See value of -3x
-```
+PyTorch stores `m.weight` with shape `(k, d)` and `m.bias` with shape `(k,)`. The forward computation is:
 
-By default, PyTorch only stores gradients for leaf tensors (inputs where we set `requires_grad=True`). This saves memory while still giving us the gradients we need for optimization. If you need gradients for intermediate values, you can request them:
+$$
+Y = X\, W^T + b,
+$$
 
-```python
-z1.retain_grad()    # Tell PyTorch to store this gradient
-f.backward()
-print(z1.grad)      # Now we can see how f changes with z₁
-```
+where $X$ is $(n,d)$, $W^T$ is $(d,k)$, and $b$ broadcasts across the batch. The output is $(n,k)$.
 
-The second method, `torch.autograd.grad()`, gives us more direct control:
-```python
-x = torch.tensor([1.0], requires_grad=True)
-f = x**3 - 3*x
-grad = torch.autograd.grad(f, x)[0]  # Get gradient directly
-```
+Row $j$ of `m.weight` is the weight vector for output coordinate $j$ -- one row per "neuron."
 
-This method (1) returns the gradient immediately as a new tensor (2) lets you compute gradients with respect to any tensor in your computation (3) creates and discards the computational graph in one step
+Why the transpose? In math, we think of transforming a column vector $y = Wx + b$. PyTorch stores data as rows and multiplies on the right, so the same map becomes $Y = XW^T + b$. The transpose is bookkeeping caused by "samples are rows." This batch-first convention matches the data-table convention (rows = samples, columns = features), generalizes cleanly (`Linear` acts on the last dimension of any tensor `(*, d) -> (*, k)`), and keeps each sample's feature vector contiguous in row-major memory.
 
-Both methods compute exactly the same gradients - they just offer different ways to access them. Use `backward()` when you want gradients stored in your tensors, and `autograd.grad()` when you want direct access to specific gradients.
+The output dimension $k$ controls what the layer does:
+- $k = 1$: a scalar classifier/regressor. `m.weight` is $(1,d)$ -- one weight vector. Output is $(n,1)$, exactly $w^T x_i + b$ in batch form.
+- $k > 1$: $k$ different weight vectors, one per output coordinate. Output is $(n,k)$. For regression, these are $k$ real targets; for classification, they are $k$ logits.
 
-The computational graph we drew earlier shows exactly how these gradients are computed, combining the derivatives at each step using the chain rule. The power of PyTorch's automatic differentiation is that it handles this process automatically, letting us focus on designing our computations rather than deriving gradients by hand.
+#### 3.3.3 Bias shifts the decision boundary
 
-### Common Pitfalls in Automatic Differentiation
+Without bias, the decision boundary $w^T x = 0$ must pass through the origin. With bias, $w^T x + b = 0$ can shift freely. If your data is not centered at the origin, the no-bias model is unnecessarily restricted.
 
-Several common mistakes can break gradient computation or cause memory issues:
+![Bias vs no-bias decision boundary](figures/bias_vs_nobias_2d.png)
 
-#### 1. In-place Operations
+*Figure 3.3: In 2D, $w^T x = 0$ is always a line through the origin. Adding a bias shifts the line.*
 
-In-place operations can break gradient computation by modifying values needed for the backward pass:
+### 3.4 Composing linear layers into a neural network
 
-```python
-# Create a tensor with gradients enabled
-x = torch.tensor([4.0], requires_grad=True)
+This is the first real step toward deep learning. A single `Linear` layer is one affine map. A neural network composes many such layers with nonlinearities in between:
 
-# Compute the square root. For sqrt, the backward pass needs the original output
-y = torch.sqrt(x)  # y is 2.0, and sqrt's backward uses this value
+1. $A_0 = X$ has shape $(n, d_0)$.
+2. Pre-activation: $Z_\ell = A_{\ell-1} W_\ell^T + b_\ell$ with shape $(n, d_\ell)$.
+3. Activation: $A_\ell = \sigma(Z_\ell)$ with shape $(n, d_\ell)$.
 
-# Show the gradient function before modification
-print("Before in-place op, y.grad_fn:", y.grad_fn)
+The batch dimension $n$ is always preserved. The feature dimension changes at each layer: $d_0 \to d_1 \to \cdots \to d_L$.
 
-# Define another operation that uses y
-z = 3 * y
-
-try:
-    # In-place modify y. This alters the saved value needed by the sqrt backward
-    y.add_(1)  # Now y becomes 3.0
-    print("After in-place op, y.grad_fn:", y.grad_fn)  # The grad_fn is now None
-    
-    # Attempt to compute gradients. This will trigger a RuntimeError
-    z.backward()
-    print("This line won't be reached")
-except RuntimeError as e:
-    print(f"Error with in-place operation: {e}")
-
-print("\nWhy did this happen?")
-print("The in-place operation (y.add_(1)) modified sqrt's output")
-print("This invalidated the saved value needed to compute the gradient:")
-print("d/dx sqrt(x) = 1/(2*sqrt(x))")
-
-# Correct way: use out-of-place operations
-x = torch.tensor([4.0], requires_grad=True)
-y = torch.sqrt(x)
-# Instead of modifying y in-place, create a new tensor
-y = y + 1
-z = 3 * y
-z.backward()  # This works fine
-print("\nCorrect gradient:", x.grad)
-
-# Before in-place op, y.grad_fn: <SqrtBackward0 object at 0x107e174f0>
-# After in-place op, y.grad_fn: <AddBackward0 object at 0x107eb24d0>
-# Error with in-place operation: one of the variables needed for gradient computation has been modified by an inplace operation: [torch.FloatTensor [1]], which is output 0 of SqrtBackward0, is at version 1; expected version 0 instead. Hint: enable anomaly detection to find the operation that failed to compute its gradient, with torch.autograd.set_detect_anomaly(True).
-
-# Why did this happen?
-# The in-place operation (y.add_(1)) modified sqrt's output
-# This invalidated the saved value needed to compute the gradient:
-# d/dx sqrt(x) = 1/(2*sqrt(x))
-
-# Correct gradient: tensor([0.7500])
-```
-
-#### 2. Memory Management
-
-The `torch.no_grad()` context manager is crucial for memory efficiency:
+#### 3.4.1 PyTorch code: a 2-layer network as a plain function
 
 ```python
-# Create large tensors
-X = torch.randn(1000, 1000, requires_grad=True)
-y = torch.randn(1000)
+import torch
 
-def compute_loss(X, y):
-    return ((X @ X.t() @ y - y)**2).sum()
+torch.manual_seed(0)
 
-# Memory inefficient: tracks all computations
-loss1 = compute_loss(X, y)
+n = 4      # batch size
+d0 = 5     # input dimension
+d1 = 10    # hidden dimension
+d2 = 3     # output dimension
 
-# Memory efficient: no gradient tracking during evaluation
-with torch.no_grad():
-    loss2 = compute_loss(X, y)
+X = torch.randn(n, d0)
 
-print(f"Gradient tracking: {loss1.requires_grad}")
-print(f"No gradient tracking: {loss2.requires_grad}")
+layer1 = torch.nn.Linear(d0, d1, bias=True)
+layer2 = torch.nn.Linear(d1, d2, bias=True)
 
-# Gradient tracking: True
-# No gradient tracking: False
-```
+def m(X):
+    Z1 = layer1(X)       # Z1 = X W1^T + b1
+    A1 = torch.relu(Z1)
+    Z2 = layer2(A1)       # Z2 = A1 W2^T + b2
+    return Z2
 
-#### 3. Gradient Accumulation
+Z1 = layer1(X)
+A1 = torch.relu(Z1)
+Z2 = layer2(A1)
 
-When training with multiple backward passes, remember to zero gradients:
+print("X.shape:", X.shape)                # (4, 5)
+print("Z1.shape:", Z1.shape)              # (4, 10)
+print("A1.shape:", A1.shape)              # (4, 10)
+print("Z2.shape:", Z2.shape)              # (4, 3)
 
-```python
-x = torch.tensor([1.0], requires_grad=True)
-optimizer = torch.optim.SGD([x], lr=0.1)
+print("layer1.weight.shape:", layer1.weight.shape)  # (10, 5) = (d1, d0)
+print("layer2.weight.shape:", layer2.weight.shape)  # (3, 10) = (d2, d1)
 
-for _ in range(2):
-    y = x**2
-    
-    # Wrong: gradients accumulate
-    y.backward(retain_graph=True)  # Need retain_graph=True for multiple backward passes
-    print(f"Accumulated gradient: {x.grad}")
-    
-    # Correct: zero gradients before backward
-    optimizer.zero_grad()
-    y = x**2  # Need to recompute y since previous backward consumed the graph
-    y.backward()
-    print(f"Clean gradient: {x.grad}")
-    
-    optimizer.step()
-# Accumulated gradient: tensor([2.])
-# Clean gradient: tensor([2.])
-# Accumulated gradient: tensor([3.6000])
-# Clean gradient: tensor([1.6000])    
-```
-
-These patterns become especially important when training deep networks where mistakes can be harder to debug.
-
-### Beyond Single Variables: Least Squares
-
-Let's examine how PyTorch handles gradient computation for the least squares problem, where we minimize $f(\mathbf{w}) = \frac{1}{2}\|\mathbf{X}\mathbf{w} - \mathbf{y}\|^2$ for data matrix $\mathbf{X} \in \mathbb{R}^{n \times p}$ and observations $\mathbf{y} \in \mathbb{R}^n$. Like our polynomial example, PyTorch builds and traverses a computational graph to compute gradients automatically.
-
-The computational graph for least squares reveals how PyTorch decomposes this multivariate optimization into elementary operations. Each node performs a specific computation in the chain that leads to our final loss:
-
-![Least Squares Computational Graph](figures/least_squares_computation.png)
-
-During the forward pass, the graph computes:
-1. Input node stores parameter vector $\mathbf{w}$
-2. Residual node computes $\mathbf{z}_1 = \mathbf{X}\mathbf{w} - \mathbf{y}$
-3. Square norm node computes $z_2 = \|\mathbf{z}_1\|^2$
-4. Scale node produces final loss $f = \frac{1}{2}z_2$
-
-In this multidimensional case, we follow the same algorithm for computing the gradient of $f$ as we did in the 1d case, but with a slight twist. As we traverse the graph in reverse order we compute and store the *total derivatives* or *Jacobians* of the intermediate nodes and multiply them out. In particular, we compute the Jacobians $\frac{\partial f}{\partial z_2}, \frac{\partial z_2}{\partial \mathbf{z}_1}, \frac{\partial \mathbf{z}_1}{\partial \mathbf{w}}$ and multiply them out to get the total derivative $\frac{\partial f}{\partial \mathbf{w}}$, which is a $1 \times p$ row matrix. The connection with the gradient of $f$ is that the total derivative is simply the tranpose of the gradient. More specifically, we have:
-
-**Output Node ($f = \frac{1}{2}z_2$):**
-- Incoming gradient: $\frac{\partial f}{\partial f} = 1$ (scalar)
-- Total derivative: $\frac{\partial f}{\partial z_2} = \frac{1}{2}$ (scalar)
-- Propagate to $z_2$ node: $\frac{\partial f}{\partial z_2} = \frac{1}{2}$ (1×1 matrix)
-
-**Square Norm Node ($z_2 = \|\mathbf{z}_1\|^2$):**
-- Incoming total derivative: $\frac{\partial f}{\partial z_2} = \frac{1}{2}$ (1×1 matrix)
-- Local total derivative: $\frac{\partial z_2}{\partial \mathbf{z}_1} = 2\mathbf{z}_1^\top$ (1×n matrix)
-- Propagate to $\mathbf{z}_1$ node: $\frac{\partial f}{\partial \mathbf{z}_1} = \frac{\partial f}{\partial z_2}\frac{\partial z_2}{\partial \mathbf{z}_1} = \mathbf{z}_1^\top$ (1×n matrix)
-
-**Residual Node ($\mathbf{z}_1 = \mathbf{X}\mathbf{w} - \mathbf{y}$):**
-- Incoming total derivative: $\frac{\partial f}{\partial \mathbf{z}_1} = \mathbf{z}_1^\top$ (1×n matrix)
-- Local total derivative: $\frac{\partial \mathbf{z}_1}{\partial \mathbf{w}} = \mathbf{X}$ (n×p matrix)
-- Total derivative to $\mathbf{w}$ node: $\frac{\partial f}{\partial \mathbf{w}} = \frac{\partial f}{\partial \mathbf{z}_1}\frac{\partial \mathbf{z}_1}{\partial \mathbf{w}} = \mathbf{z}_1^\top\mathbf{X}$ (1×p matrix)
-
-**Input Node ($\mathbf{w}$):**
-- Total derivative: $\frac{\partial f}{\partial \mathbf{w}} = \mathbf{z}_1^\top\mathbf{X}$ (1×p matrix)
-- Convert to gradient: $\nabla f = (\frac{\partial f}{\partial \mathbf{w}})^\top = \mathbf{X}^\top\mathbf{z}_1$ (p×1 matrix)
-
-This computation reveals why the transpose appears: the chain rule naturally produces the total derivative $\frac{\partial f}{\partial \mathbf{w}}$ as a row vector (1×p matrix), but we conventionally write the gradient $\nabla f$ as a column vector (p×1 matrix). The transpose converts between these representations.
-
-The full chain rule expansion shows how the total derivative combines all computations:
-
-$$ \frac{\partial f}{\partial \mathbf{w}} = \frac{\partial f}{\partial z_2} \frac{\partial z_2}{\partial \mathbf{z}_1} \frac{\partial \mathbf{z}_1}{\partial \mathbf{w}} = \frac{1}{2} \cdot 2\mathbf{z}_1^\top \cdot \mathbf{X} = \mathbf{z}_1^\top\mathbf{X} $$
-
-And the gradient is its transpose:
-
-$$ \nabla f = \frac{\partial f}{\partial \mathbf{w}}^\top = \mathbf{X}^\top\mathbf{z}_1 = \mathbf{X}^\top(\mathbf{X}\mathbf{w} - \mathbf{y})$$
-
-This computation happens automatically in PyTorch through the computational graph structure, with each node computing its local total derivatives. The graph structure determines where accumulation is needed (at nodes with multiple outgoing edges), and the mechanical process of backpropagation handles the rest.
-
-From the perspective of code, nothing changes. We still define the loss function as before, and call `loss.backward()` to compute the gradient.
-
-```python
-# Convert data to PyTorch tensors
-X = torch.tensor(X_data, dtype=torch.float32)
-y = torch.tensor(y_data, dtype=torch.float32)
-w = torch.zeros(X.shape[1], requires_grad=True)  # Initialize weights
-
-# Compute loss
-predictions = X @ w
-loss = 0.5 * torch.mean((predictions - y)**2)
-
-# Compute gradient
+# Autograd sanity check: compute a dummy loss, call backward
+Y = torch.randn(n, d2)
+loss = ((Z2 - Y) ** 2).mean()
 loss.backward()
-print(f"PyTorch gradient: {w.grad}")
+
+print("loss:", loss.item())
+print("||grad layer1.weight||:", layer1.weight.grad.norm().item())
+print("||grad layer2.weight||:", layer2.weight.grad.norm().item())
 ```
 
-To verify that PyTorch computes the correct gradient, we can compare it with our manual calculation:
+---
 
-![Least Squares Comparison](figures/least_squares_comparison.png)
+A `torch.nn.Linear` layer is already a linear map, but it treats every input coordinate independently. What if the input has spatial structure -- pixels in an image, samples in a time series? That is what convolution layers are for.
 
-The figure shows the contours of the least squares loss function for a simple 2D problem. At three different points (marked in red, blue, and green), we compute gradients using both manual calculation (left) and PyTorch's automatic differentiation (right). The arrows show the negative gradient direction at each point - the direction of steepest descent. The gradient computed by PyTorch matches the manual calculation, confirming that PyTorch computes the correct gradient.
+## 4. Convolution layers as linear maps with weight sharing
 
-## Applying Gradient Descent to Least Squares
+### 4.1 Convolutions as pattern detectors reused across space
 
-Now that we know how to compute gradients via autodifferentiation, let's use them to find the optimal weights in a least squares problem. First let's recall how we manually ran gradient descent on the least squares loss
+A `Linear` layer assigns one weight per input coordinate. But signals and images have spatial structure: the same local pattern (an edge, a pulse, a corner) can appear in many locations. We want to detect it anywhere without learning separate weights for every position.
 
-$$ f(w) = \frac{1}{2}\|Xw - y\|_2^2 $$
+The idea: learn a small set of weights -- a **kernel** -- and slide it across the input, taking a dot product at each location. This is **weight sharing**: one small kernel parameterizes a large linear map.
 
-In the previous lecture, we derived the gradient manually:
+A 1D conv filter is a sliding dot product with a small pattern, producing a "match score" at each location. Large positive response means "this patch looks like the pattern"; negative means "looks like the opposite."
 
-$$ \nabla f(w) = X^\top(Xw - y) $$
+### 4.2 1D illustration: signal + kernel + response
+
+![1D convolution as pattern detection](figures/conv1d_pattern_detection.png)
+
+*Figure 4.1: Top: a 1D signal $x[n]$ with a short motif embedded at two locations (dashed vertical lines mark the motif centers). Middle: the kernel $k[t]$ (mean-centered, normalized). Bottom: the response $r[n]$ produced by sliding $k$ over $x$ and taking dot products. Peaks occur near the embedded motifs.*
+
+Key parameters:
+
+- **Kernel (filter):** a short trainable template slid across the signal. In Figure 4.1, the middle plot is this template.
+- **Input channels (`C_in`):** number of parallel signal streams at each index. Figure 4.1 is single-channel.
+- **Output channels (`C_out`):** number of detectors you learn. Each produces its own response signal.
+- **Stride:** how many indices the kernel shifts each step. `stride = 1` checks every position; `stride = 2` skips every other.
+- **Padding:** zeros added at boundaries so edge locations are treated more like interior ones.
+
+PyTorch syntax:
 
 ```python
-# Manual gradient descent
-def manual_gradient(X, y, w):
-    # Gradient of 0.5 * ||Xw - y||^2 / n is X^T(Xw - y) 
-    return X.T @ (X @ w - y)  
-
-w_manual = torch.zeros(2) # initialize the weights with zeros
-for step in range(max_iter):
-    grad = manual_gradient(X, y, w_manual)
-    w_manual = w_manual - alpha * grad
+conv1d = torch.nn.Conv1d(in_channels=C_in, out_channels=C_out, kernel_size=k, stride=1, padding=0, bias=True)
 ```
 
-Now let's compare to the PyTorch implementation, which uses `backward()` to compute the gradient.
+- input shape: `(batch_size, C_in, L)`
+- weight shape: `(C_out, C_in, k)`
+- output shape: `(batch_size, C_out, L_out)`
 
-```python
-# PyTorch gradient descent
-w_torch = torch.zeros(2, requires_grad=True) # initialize the weights with zeros and track gradients
-for step in range(max_iter):
-    ## Forward pass
-    pred = X @ w_torch # compute the predictions
-    loss = 0.5 * torch.sum((pred - y)**2)  # compute the loss
-    
-    ## Backward pass
-    loss.backward() # compute the gradient
-    
-    ## Update weights
-    with torch.no_grad(): # Do not modify the computational graph
-        w_torch -= alpha * w_torch.grad # update the weights
-        w_torch.grad.zero_() # reset the gradient to zero to avoid accumulation
-```
-
-We ran both implementations on the same data and found the following results: 
-
-![Linear Regression Comparison](figures/linear_regression_comparison.png)
-
-Both methods (1) converge to the same optimal weights, (2) follow identical trajectories, and (3) achieve the same final loss value. This agreement confirms that PyTorch computes exact gradients, matching our manual calculations. The difference lies in convenience - PyTorch handles the gradient computation automatically, while we had to derive and implement the gradient formula manually.
-
-For a more complex example, let's implement logistic regression on the MNIST dataset. We'll explore this in detail in the following section.
-
-## More Complex Loss Functions: Building Neural Networks
-
-Linear regression maps inputs to outputs through a single transformation: $\mathbf{y} = \mathbf{X}\mathbf{w}$. Neural networks extend this idea by stacking multiple transformations, enabling them to learn more complex patterns. Let's examine how PyTorch implements these layered models.
-
-Consider binary classification. Instead of a single linear transformation, we compose (1) a linear transformation to create hidden features, (2) a nonlinear activation to introduce nonlinearity, (3) another linear transformation to produce predictions, and (4) a final nonlinearity to output probabilities. Graphically, this looks like:
-```
-Input → Linear₁ → Tanh → Linear₂ → Sigmoid → Output
-ℝᵈ      ℝʰˣᵈ      ℝʰ     ℝ¹ˣʰ      [0,1]     [0,1]
-```
-
-Mathematically, for input $\mathbf{x} \in \mathbb{R}^d$:
-
-1. First transformation creates hidden features $\mathbf{h} \in \mathbb{R}^h$:
-   $$ \mathbf{h} = \tanh(\mathbf{W}_1\mathbf{x} + \mathbf{b}_1) $$
-   where $\mathbf{W}_1 \in \mathbb{R}^{h \times d}$ and $\mathbf{b}_1 \in \mathbb{R}^h$
-
-2. Second transformation produces probability $p \in [0,1]$:
-   $$ p(y=1|\mathbf{x}) = \sigma(\mathbf{w}_2^\top\mathbf{h} + b_2) $$
-   where $\mathbf{w}_2 \in \mathbb{R}^h$ and $b_2 \in \mathbb{R}$
-
-PyTorch's `nn.Module` provides a natural way to implement this architecture:
-
-```python
-class BinaryClassifier(nn.Module):
-    def __init__(self, input_dim=2, hidden_dim=10):
-        super().__init__()
-        # First transformation: ℝᵈ → ℝʰ
-        self.linear1 = nn.Linear(input_dim, hidden_dim)
-        
-        # Second transformation: ℝʰ → ℝ
-        self.linear2 = nn.Linear(hidden_dim, 1)
-    
-    def forward(self, x):  # x shape: [batch_size, input_dim]
-        # Hidden features: [batch_size, hidden_dim]
-        h = torch.tanh(self.linear1(x))
-        
-        # Output probability: [batch_size, 1]
-        return torch.sigmoid(self.linear2(h))
-```
-
-Each `nn.Module` layer stores both a weight matrix and a bias vector. When we call the `forward` method, the layer computes the hidden features and then applies the nonlinearity to produce the output probability. The code initializes the weights and biases automatically, and registers them for gradient computation. This modular design lets us build complex models by composing simple layers, let PyTorch handle parameter management, and focus on model architecture rather than implementation details. For example, we can swap out the nonlinearity (the $\tanh$) with a different activation function to try out different architectures.
-
-### MNIST Classification Example
-
-In this section, we design a classifier for the MNIST digit classification task using logistic regression (a neural network with no hidden layers) and a neural network with one hidden layer. We focus on binary classification to determine whether a digit is odd or even. This demonstrates how PyTorch allows us to swap out models and losses to try out different architectures with just a few lines of code.
-
-The implementation uses `torchvision.datasets.MNIST` for data loading and `transforms.Normalize` for preprocessing. Input images are normalized with MNIST's statistics (mean=0.1307, std=0.3081):
-
-```python
-transform = transforms.Compose([
-    transforms.ToTensor(),
-    transforms.Normalize((0.1307,), (0.3081,))
-])
-train_dataset = datasets.MNIST('./data', train=True, transform=transform)
-```
-
-![MNIST Examples](figures/mnist_examples.png)
-*Examples of MNIST digits. The models aims to identify the parity (odd/even) of each digit.*
-
-The objective uses binary cross-entropy loss to measure the discrepancy between predicted probabilities and true labels:
-
-$$ L(w) = -\frac{1}{n}\sum_{i=1}^n [y_i \log p(y_i|x_i) + (1-y_i)\log(1-p(y_i|x_i))] $$
-
-where $y_i$ indicates whether digit $i$ is odd (1) or even (0), and $$ p(y_i \mid x_i) $$ is the model's predicted probability. As before: 
+For each output channel $j$:
 
 $$
-p(y_i = 1 \mid x_i) = \sigma(\text{model}(x_i)),
+r_j(n) = \sum_{c=1}^{C_\text{in}} \langle \text{local patch from channel } c,\; k_{j,c}\rangle + b_j.
 $$
 
-where we $\sigma$ is the sigmoid function and we use one of two models. First, logistic regression provides a baseline using a single linear layer:
+The layer combines information across input channels by summing channel-wise responses. If `C_out = 2`, you get two separate response signals $r_1(n)$ and $r_2(n)$; they are not summed together.
+
+![Conv1d usage variants](figures/conv1d_usage_variants.png)
+
+*Figure 4.1b: Top: two input channels. Row 2 compares `C_in=1 -> C_out=1` vs `C_in=2 -> C_out=1` (sum over input channels). Row 3 shows `C_in=2 -> C_out=2` producing two separate outputs. Row 4 shows how stride/padding changes output sampling and boundary behavior.*
+
+![Multi-channel 1D convolution illustration](figures/conv1d_multichannel_illustration.png)
+
+### 4.3 Matrix view: convolution as a Toeplitz linear map
+
+If you store 1D signals as row vectors with a batch dimension, $X$ has shape `(batch_size, N)`. Convolution by a fixed kernel is a linear map on the right:
+
+$$
+R = X K^T,
+$$
+
+where $K$ is a Toeplitz (banded) matrix whose rows are shifted copies of the same kernel weights. The matrix is large, but completely determined by a small kernel $k$ -- that is the weight sharing. The transpose is the same bookkeeping as `torch.nn.Linear`: one output feature per row of $K$, multiply on the right to preserve batch-first layout.
+
+![Toeplitz matrix for 1D convolution](figures/toeplitz_conv_matrix.png)
+
+*Figure 4.2: A Toeplitz matrix $K$ encoding a 1D sliding dot product. Each row is a shifted copy of the same kernel weights. The linear map is huge, but parameterized by a short vector.*
+
+Shape summary:
+- Single-channel: signal length $N$, kernel length $m$ with $m \ll N$.
+- Multi-channel: input has $C_\text{in}$ channels, weights have shape `(C_out, C_in, m)`, output has $C_\text{out}$ channels.
+
+The weights live in "local patch dimensions" (and channel depth), not in the full signal length.
+
+### 4.4 2D illustration: image + kernel + feature map
+
+![2D convolution as template matching](figures/conv2d_template_matching.png)
+
+*Figure 4.3: Left: a synthetic image with a small motif repeated at two locations (red boxes). Middle: a small kernel. Right: the feature map produced by sliding the kernel over the image. Bright spots indicate matches.*
+
+PyTorch syntax:
 
 ```python
-class Logistic(torch.nn.Module):
-    def __init__(self, input_dim):
+conv2d = torch.nn.Conv2d(in_channels=C_in, out_channels=C_out, kernel_size=(kH, kW), stride=1, padding=0, bias=True)
+```
+
+Each output channel is one learned 2D detector. At each spatial location $(u,v)$, detector $j$ reads a local patch from every input channel, computes channel-wise dot products, sums them, and adds a bias:
+
+$$
+r_j(u,v) = \sum_{c=1}^{C_\text{in}} \langle \text{local 2D patch from channel } c,\; K_{j,c}\rangle + b_j.
+$$
+
+Shape summary (2D):
+- input: `(batch_size, C_in, H, W)`
+- weights: `(C_out, C_in, kH, kW)`
+- output: `(batch_size, C_out, H_out, W_out)`
+
+If you flatten each image into a row vector, 2D convolution is again $R = X K^T$ where $K$ is sparse block-Toeplitz. Same moral: huge implied linear map, small local kernel.
+
+### 4.5 3D convolution
+
+3D convolution extends the idea to three spatial axes:
+
+- **Volumetric data** (MRI, CT scans as voxel grids): the kernel slides over depth $\times$ height $\times$ width to detect 3D features like lesions or anatomical landmarks.
+- **Video** (frames stacked along time): the kernel slides over time $\times$ height $\times$ width to detect spatiotemporal patterns like a moving edge or gesture.
+
+```python
+conv3d = torch.nn.Conv3d(in_channels=C_in, out_channels=C_out, kernel_size=(kD, kH, kW), stride=1, padding=0, bias=True)
+```
+
+Shape summary (3D):
+- input: `(batch_size, C_in, D, H, W)`
+- weights: `(C_out, C_in, kD, kH, kW)`
+- output: `(batch_size, C_out, D_out, H_out, W_out)`
+
+### 4.6 Summary: 1D vs 2D vs 3D
+
+The "dimension" is the space you slide over:
+
+- 1D: one axis (time, sequence index)
+- 2D: a grid (height $\times$ width)
+- 3D: a volume (depth/time $\times$ height $\times$ width)
+
+In all cases, channels work the same way: each detector sums channel-wise local dot products over $C_\text{in}$ and produces one output channel.
+
+### 4.7 Pooling: turning feature maps into prediction-ready vectors
+
+Convolutional layers return tensors with spatial structure, e.g. `(B, C_out, H, W)` in 2D. Prediction heads need one vector per sample, so we reduce spatial dimensions while keeping channel information.
+
+**Local pooling.** Slide a $k \times k$ window with stride $s$ over each channel map $M \in \mathbb{R}^{H \times W}$. At each window position $(u,v)$, average pooling returns the mean of the $k^2$ values in that window; max pooling returns the maximum:
+
+$$
+\mathrm{AvgPool}_{k,s}(M)_{u,v} = \operatorname{mean}(\text{window at } u,v),
+\qquad
+\mathrm{MaxPool}_{k,s}(M)_{u,v} = \max(\text{window at } u,v).
+$$
+
+![Local pooling window + stride illustration](figures/pooling_window_stride.png)
+
+*Figure 4.4a: A single-channel map $M$ with window size `k=2`, stride `s=2`. White grid lines mark pooling windows. Middle: average pooling output. Right: max pooling output.*
+
+**Global pooling (GP).** Reduce each channel map to a single number by averaging or taking the max over all spatial positions. If $P$ has shape $(B, C_\text{out}, H', W')$, then $g = \mathrm{GP}(P)$ has shape $(B, C_\text{out})$ -- one scalar per channel per sample.
+
+![Global pooling variants](figures/global_pooling_variants.png)
+
+*Figure 4.4b: Global average and global max pooling both return one scalar per channel (same shape). They differ only in reduction rule (mean vs max over the full spatial map).*
+
+The full prediction pipeline:
+
+$$
+P = \mathrm{Pool}_{k,s}(A),\qquad
+g = \mathrm{GP}(P),\qquad
+z = g\, W_{\text{head}}^T + b_{\text{head}}.
+$$
+
+Here $z$ has shape $(B, \text{num\_classes})$.
+
+PyTorch syntax:
+
+```python
+pool_local = torch.nn.AvgPool2d(kernel_size=2, stride=2)  # or MaxPool2d
+P = pool_local(A)                                          # (B, C_out, H', W')
+
+g = torch.nn.functional.adaptive_avg_pool2d(P, output_size=1).flatten(1)  # (B, C_out)
+head = torch.nn.Linear(C_out, num_classes)
+logits = head(g)                                           # (B, num_classes)
+```
+
+(`AvgPool1d/3d`, `MaxPool1d/3d`, and `adaptive_avg_pool1d/3d` are the 1D and 3D analogs.)
+
+![Pooling process from feature maps to logits](figures/pooling_process.png)
+
+*Figure 4.4c: Pipeline view for one sample. Pool feature maps, collapse spatial dimensions with GP, then apply a linear head.*
+
+### 4.8 A small CNN implementation
+
+Batch-first still holds, but conv layers expect **channels-first** tensors: the channel axis comes right after the batch axis, before any spatial dimensions.
+
+```python
+import torch
+
+torch.manual_seed(0)
+
+batch_size, C_in, H, W = 2, 3, 32, 32
+X = torch.randn(batch_size, C_in, H, W)
+
+C_hidden, C_out = 8, 16
+conv1 = torch.nn.Conv2d(C_in, C_hidden, kernel_size=3, stride=1, padding=1, bias=True)
+conv2 = torch.nn.Conv2d(C_hidden, C_out, kernel_size=3, stride=1, padding=1, bias=True)
+
+Z1 = conv1(X)
+A1 = torch.relu(Z1)
+Z2 = conv2(A1)
+
+print("X.shape:", X.shape)    # (2, 3, 32, 32)
+print("Z1.shape:", Z1.shape)  # (2, 8, 32, 32)
+print("Z2.shape:", Z2.shape)  # (2, 16, 32, 32)
+
+print("conv1.weight.shape:", conv1.weight.shape)  # (8, 3, 3, 3) = (C_out, C_in, kH, kW)
+print("conv2.weight.shape:", conv2.weight.shape)  # (16, 8, 3, 3)
+
+# Bridge to classification: pool away spatial dims, then linear head
+pooled = Z2.mean(dim=(2, 3))       # (2, 16)
+num_classes = 5
+head = torch.nn.Linear(C_out, num_classes)
+logits = head(pooled)
+print("logits.shape:", logits.shape)  # (2, 5)
+```
+
+---
+
+## 5. Introducing `torch.nn.Module` (the standard model container)
+
+A `Module` bundles learnable parameters and forward computation into one object. The recipe:
+
+1. Define a class inheriting from `torch.nn.Module`.
+2. In `__init__`: call `super().__init__()`, create layers as attributes.
+3. In `forward(self, X)`: write the computation, return the output.
+4. Call the object like a function: `model(X)`.
+
+### 5.1 A minimal `Module`
+
+```python
+import torch
+
+class TwoLayerNet(torch.nn.Module):
+    def __init__(self, d0, d1, d2):
         super().__init__()
-        self.linear = torch.nn.Linear(input_dim, 1, bias=False)
-    
-    def forward(self, x):
-        return torch.sigmoid(self.linear(x))
+        self.layer1 = torch.nn.Linear(d0, d1, bias=True)
+        self.layer2 = torch.nn.Linear(d1, d2, bias=True)
+
+    def forward(self, X):
+        Z1 = self.layer1(X)
+        A1 = torch.relu(Z1)
+        Z2 = self.layer2(A1)
+        return Z2
+
+torch.manual_seed(0)
+
+n, d0, d1, d2 = 4, 5, 10, 3
+X = torch.randn(n, d0)
+
+model = TwoLayerNet(d0, d1, d2)
+out = model(X)
+
+print("out.shape:", out.shape)                  # (4, 3)
+print("number of parameter tensors:", len(list(model.parameters())))  # 4
+for p in model.parameters():
+    print("  param shape:", tuple(p.shape))
 ```
 
-The neural network extends this with a hidden layer and ReLU activation to learn nonlinear decision boundaries:
+Define layers in `__init__`, wire them in `forward`, call the model like a function. PyTorch uses `forward` to build a computation graph for automatic gradients.
+
+### 5.2 Why `Module` over a plain function
+
+A plain function computes the same output, but `Module` gives you infrastructure for free:
+
+1. **Parameter registration** -- `model.parameters()` collects every learnable tensor automatically.
+2. **Saving/loading** -- `model.state_dict()` serializes all parameters; `load_state_dict()` restores them.
+3. **Device management** -- `model.to(device)` moves every parameter to CPU/GPU together.
+4. **Train/eval modes** -- `model.train()` / `model.eval()` toggle layers like dropout and batchnorm.
+5. **Composition and introspection** -- Modules nest inside other Modules; `named_parameters()` and `named_modules()` make debugging systematic.
+
+### 5.3 A convolutional `Module`
 
 ```python
-class SimpleNN(torch.nn.Module):
-    def __init__(self):
+import torch
+
+class SmallCNN(torch.nn.Module):
+    def __init__(self, C_in, C_hidden, C_out, num_classes):
         super().__init__()
-        self.fc1 = torch.nn.Linear(784, 32)
-        self.fc2 = torch.nn.Linear(32, 1)
-    
-    def forward(self, x):
-        h = torch.relu(self.fc1(x))
-        return torch.sigmoid(self.fc2(h))
+        self.conv1 = torch.nn.Conv2d(C_in, C_hidden, kernel_size=3, padding=1, bias=True)
+        self.conv2 = torch.nn.Conv2d(C_hidden, C_out, kernel_size=3, padding=1, bias=True)
+        self.head = torch.nn.Linear(C_out, num_classes, bias=True)
+
+    def forward(self, X):
+        A1 = torch.relu(self.conv1(X))
+        A2 = torch.relu(self.conv2(A1))
+        pooled = A2.mean(dim=(2, 3))
+        return self.head(pooled)
+
+torch.manual_seed(0)
+
+X = torch.randn(2, 3, 32, 32)
+model = SmallCNN(C_in=3, C_hidden=8, C_out=16, num_classes=5)
+logits = model(X)
+
+print("logits.shape:", logits.shape)            # (2, 5)
+print("num parameter tensors:", len(list(model.parameters())))  # 7
+print("state_dict keys:", list(model.state_dict().keys())[:5])
 ```
 
-We then train the model using PyTorch's automatic differentiation to compute gradients of the binary cross-entropy loss. The training loop follows three essential steps:
+---
 
-1. Forward Pass: Compute predictions and loss
-   - Feed data through the model to get predictions
-   - Calculate loss between predictions and true labels
+## 6. Putting it together: the training loop
 
-2. Backward Pass: Compute gradients
-   - Call `loss.backward()` to compute gradients through the computational graph
-   - PyTorch automatically handles the chain rule through all operations
+We introduced squared loss and logistic loss in Section 2. Now that we have `Module` containers, here is how all the pieces fit into a training step.
 
-3. Parameter Update: Apply gradients
-   - Zero out existing gradients to prevent accumulation from previous steps
-   - Update each parameter using the computed gradients
-   - The update follows $w \leftarrow w - \alpha \nabla L(w)$ where $\alpha$ is the learning rate
+### 6.1 The training skeleton
 
-Here's the implementation:
+Whether you are training a regression model or a classifier, the loop is the same:
+
+1. Start with a mini-batch `(X, y)`.
+2. Forward pass: `logits = model(X)`.
+3. Evaluate a scalar loss: `loss = loss_fn(logits, y)`.
+4. Backward pass: `loss.backward()` -- computes gradients of the loss with respect to every parameter.
+5. Update parameters (via an optimizer or manual step).
+6. Zero gradients before the next batch.
+
+**Logits** are the raw model outputs before any final sigmoid or softmax. The loss function handles the conversion internally.
+
+### 6.2 Which loss for which task
+
+Section 2 derived the losses from first principles. Here is the summary with PyTorch function names:
+
+| Task | Loss | PyTorch |
+|------|------|---------|
+| Regression | $\frac{1}{n}\sum(\widehat{y}_i - y_i)^2$ | `F.mse_loss(logits, y)` |
+| Binary classification | $\log(1+\exp(-y\cdot a))$ | `F.binary_cross_entropy_with_logits(logits, y)` |
+| Multi-class classification | cross-entropy on logits | `F.cross_entropy(logits, y)` (expects integer labels) |
+
+Important: `cross_entropy` takes logits directly. Do not apply softmax first.
+
+### 6.3 Computing a loss and inspecting gradients
+
+After `loss.backward()`, every parameter tensor has a `.grad` field storing its gradient.
 
 ```python
-# Define the loss function
-criterion = torch.nn.BCELoss()
+import torch
+import torch.nn.functional as F
 
-def train_model(model, X_train, y_train, X_val, y_val, alpha=0.01, n_steps=1000):
-    for step in range(n_steps):
-        # Forward pass
-        y_pred = model(X_train)
-        loss = criterion(y_pred.squeeze(), y_train)
-        
-        # Backward pass
-        loss.backward()
-        
-        # Update parameters
-        with torch.no_grad(): # Do not modify the computational graph
-            for param in model.parameters():
-                param -= alpha * param.grad # update the parameters
-                param.grad.zero_() # reset the gradient to zero to avoid accumulation
+torch.manual_seed(0)
+
+class TwoLayerNet(torch.nn.Module):
+    def __init__(self, d0, d1, d2):
+        super().__init__()
+        self.layer1 = torch.nn.Linear(d0, d1, bias=True)
+        self.layer2 = torch.nn.Linear(d1, d2, bias=True)
+
+    def forward(self, X):
+        return self.layer2(torch.relu(self.layer1(X)))
+
+batch_size, d0, d1, num_classes = 8, 5, 12, 4
+X = torch.randn(batch_size, d0)
+y = torch.randint(0, num_classes, (batch_size,))
+
+model = TwoLayerNet(d0, d1, num_classes)
+logits = model(X)
+
+loss_value = F.cross_entropy(logits, y)
+print("loss:", loss_value.item())
+
+loss_value.backward()
+
+for name, p in model.named_parameters():
+    print(f"  {name}: param {tuple(p.shape)}, grad norm {p.grad.norm().item():.4f}")
 ```
-The neural network achieves 92.40% test accuracy versus logistic regression's 87.30%. This gap results from the neural network's ability to learn 
-nonlinear decision boundaries.
 
-![MNIST Training Curves](figures/mnist_training_curves.png)
-*Training curves for logistic regression (blue) and neural network (red). The neural network learns faster and reaches higher accuracy.*
+### 6.4 Zeroing gradients
+
+Gradients **accumulate** by default in PyTorch -- calling `backward()` twice without resetting adds to the existing `.grad`. The fix: zero gradients once per batch, either with `model.zero_grad()` or (more commonly) `optimizer.zero_grad()`.
+
+---
+
+## 7. Conclusion
+
+We now have the full formulation toolkit: data and models compose into a loss, regularizers encode prior knowledge, and `backward()` produces the gradients you need for training. Linear and convolutional layers are the two fundamental building blocks; `torch.nn.Module` is how you package them. Next lecture: modern generative models (e.g., transformers) built from these same pieces.
 
