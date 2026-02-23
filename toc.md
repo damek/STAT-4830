@@ -25,8 +25,8 @@ title: Table of Contents
 
 Some 2025 content below; yet to be deleted.
 
-[4. How to compute gradients in PyTorch](section/4/notes.md) | [Slides](section/4/slides.pdf) | [Notebook](https://colab.research.google.com/github/damek/STAT-4830/blob/main/section/4/notebook.ipynb)
-   > Introduction to PyTorch's automatic differentiation system.
+[4. Loss functions and models for regression and classification problems](section/4/notes.md) | [Live demo](https://colab.research.google.com/github/damek/STAT-4830/blob/main/section/4/live-demo.ipynb)
+   > Formulate ML objectives, choose losses for regression/classification, and build/train linear and convolutional models in PyTorch.
 
 [5. How to think about derivatives through best linear approximation](section/5/notes.md)
    > How to think about derivatives through best linear approximation.

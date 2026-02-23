@@ -5,8 +5,6 @@ title: Loss functions and models for regression and classification problems
 
 # 4. Loss functions and models for regression and classification problems
 
-[cheatsheet](cheatsheet.html)
-
 ## Table of contents
 1. [Purpose: formulating machine learning problems](#1-purpose-formulating-machine-learning-problems)
 2. [Example: linear models + sparsity + logistic regression](#2-example-linear-models--sparsity--logistic-regression)
