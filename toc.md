@@ -21,12 +21,15 @@ title: Table of Contents
 [3. Optimization and PyTorch basics in higher dimensions](section/3/notes.md) | [Live demo](https://colab.research.google.com/github/damek/STAT-4830/blob/main/section/3/live-demo.ipynb)
   > Lift optimization to $\mathbb{R}^d$, derive gradient descent from the local model, and tour PyTorch tensors, efficiency, dtypes, and devices.
 
+[4. Loss functions and models for regression and classification problems](section/4/notes.md) | [Live demo](https://colab.research.google.com/github/damek/STAT-4830/blob/main/section/4/live-demo.ipynb)
+   > Formulate ML objectives, choose losses for regression/classification, and build/train linear and convolutional models in PyTorch.
+
+   
 ---
 
 Some 2025 content below; yet to be deleted.
 
-[4. Loss functions and models for regression and classification problems](section/4/notes.md) | [Live demo](https://colab.research.google.com/github/damek/STAT-4830/blob/main/section/4/live-demo.ipynb)
-   > Formulate ML objectives, choose losses for regression/classification, and build/train linear and convolutional models in PyTorch.
+
 
 [5. How to think about derivatives through best linear approximation](section/5/notes.md)
    > How to think about derivatives through best linear approximation.
