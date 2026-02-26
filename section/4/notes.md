@@ -323,7 +323,7 @@ where $X$ is $(n,d)$, $W^T$ is $(d,k)$, and $b$ broadcasts across the batch. The
 
 Row $j$ of `m.weight` is the weight vector for output coordinate $j$ -- one row per "neuron."
 
-Why the transpose? In math, we think of transforming a column vector $y = Wx + b$. PyTorch stores data as rows and multiplies on the right, so the same map becomes $Y = XW^T + b$. The transpose is bookkeeping caused by "samples are rows." This batch-first convention matches the data-table convention (rows = samples, columns = features), generalizes cleanly (`Linear` acts on the last dimension of any tensor `(*, d) -> (*, k)`), and keeps each sample's feature vector contiguous in row-major memory.
+Why the transpose? In math, we think of transforming a column vector $y = Wx + b$. PyTorch stores data as rows and multiplies on the right, so the same map becomes $Y = XW^T + b$. The transpose is bookkeeping caused by "samples are rows." This batch-first convention matches the data-table convention (rows = samples, columns = features), generalizes cleanly (`Linear` acts on the last dimension of any tensor `(*, d) -> (*, k)`), and keeps each sample's feature vector contiguous in row-major memory; this makes it fast to retrieve a sample's features as a contiguous vector.
 
 The output dimension $k$ controls what the layer does:
 - $k = 1$: a scalar classifier/regressor. `m.weight` is $(1,d)$ -- one weight vector. Output is $(n,1)$, exactly $w^T x_i + b$ in batch form.
