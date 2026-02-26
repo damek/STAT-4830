@@ -438,11 +438,9 @@ $$
 
 The layer combines information across input channels by summing channel-wise responses. If `C_out = 2`, you get two separate response signals $r_1(n)$ and $r_2(n)$; they are not summed together.
 
-![Conv1d usage variants](figures/conv1d_usage_variants.png)
+![Multi-channel Conv1d mechanics and usage variants](figures/conv1d_multichannel_combined.png)
 
-*Figure 4.1b: Top: two input channels. Row 2 compares `C_in=1 -> C_out=1` vs `C_in=2 -> C_out=1` (sum over input channels). Row 3 shows `C_in=2 -> C_out=2` producing two separate outputs. Row 4 shows how stride/padding changes output sampling and boundary behavior.*
-
-![Multi-channel 1D convolution illustration](figures/conv1d_multichannel_illustration.png)
+*Figure 4.1b: Two views of the same synthetic setup. Top panel: one detector with `C_in=2, C_out=1`, where the response is the channel-summed signal $r(n)=\langle x_1,k_1\rangle+\langle x_2,k_2\rangle$. Bottom panel (three rows) reuses the same inputs from the top panel: row 1 ("adding an input channel") compares `C_in=1 -> C_out=1` against `C_in=2 -> C_out=1`; row 2 shows `C_in=2 -> C_out=2` (two separate outputs); row 3 changes stride/padding for the same detector to show output resampling and boundary effects.*
 
 ### 4.3 Matrix view: convolution as a Toeplitz linear map
 
