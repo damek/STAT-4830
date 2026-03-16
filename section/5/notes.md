@@ -6,7 +6,7 @@ title: A step-by-step introduction to transformer models
 # 5. A step-by-step introduction to transformer models
 
 ## Table of contents
-1. [From prediction to generation](#1-from-prediction-to-generation)
+1. [Sequence data and next-token prediction](#1-sequence-data-and-next-token-prediction)
 2. [Vocabularies, tokenization, and embeddings](#2-vocabularies-tokenization-and-embeddings)
 3. [Next token prediction: the task and the loss](#3-next-token-prediction-the-task-and-the-loss)
 4. [Building attention step by step](#4-building-attention-step-by-step)
@@ -16,7 +16,7 @@ title: A step-by-step introduction to transformer models
 8. [Conclusion](#8-conclusion)
 9. [Appendix: figure generation scripts](#appendix-figure-generation-scripts)
 
-## 1. From prediction to generation
+## 1. Sequence data and next-token prediction
 
 Last lecture we had data as pairs $(x_i, y_i)$ and learned a model $m(x; w)$ to predict $y$ from $x$. We built linear models (linear regression, logistic regression) and nonlinear models (multi-layer perceptrons, convolutional neural networks). In every case the task was supervised: given an input, produce a target.
 
@@ -180,7 +180,7 @@ $$
 
 This is the **next-token prediction loss**. Each term $-\log p_\theta(x_t \mid \cdots)$ penalizes the model for assigning low probability to the token that actually appeared. Because $\log$ is the natural logarithm, the loss is measured in **nats** (natural units of information); dividing by the number of tokens gives **nats per token**. A model that assigns uniform probability over $\vert V\vert = 65$ tokens has loss $\log 65 \approx 4.17$ nats/token; any value below this indicates the model has learned something.
 
-In practice the sum over all sequences is too expensive to compute at each step. Instead we estimate it by sampling a random **mini-batch** of $B$ subsequences of length $T$ from the training data, computing the average loss over the batch, and taking one gradient step. In our experiments we use $B = 64$ and $T = 128$. Minimizing this stochastic estimate trains the model to be a good next-token predictor across all positions in all training sequences.
+In practice the sum over all sequences is too expensive to compute at each step. Instead we estimate it by sampling a random **mini-batch** of $B$ subsequences of length $T$ from the training data, computing the average loss over the batch, and taking one gradient step. Each subsequence starts at a uniformly random position in the training text, so subsequences overlap and the same character can appear in many different batches across training. In our experiments we use $B = 64$ and $T = 128$. Minimizing this stochastic estimate trains the model to be a good next-token predictor across all positions in all training sequences.
 
 ## 4. Building attention step by step
 
@@ -198,11 +198,17 @@ $$
 
 This ignores the rest of the sequence entirely. The next-token prediction depends only on the identity of the current token, not on any context. Given the character "t", the model outputs the same distribution over the next character regardless of whether "t" appears in "the" or "cat". It can learn that after "t", the character "h" is common (because "th" appears often in English), but it assigns the same distribution after every "t" it sees.
 
-After training, this model closely approximates the **character-frequency statistics** of the training data: the probability it assigns to each next character, given a current character, matches the frequency of that character pair in Shakespeare. Figure 4.1 verifies this claim by comparing the model's marginal character distribution to the training data's character frequencies.
+After training, this model closely approximates the **character-pair statistics** of the training data: given a current character, the model's predicted distribution over the next character matches the frequency of that character pair in Shakespeare. Figure 4.1 verifies this claim by comparing the model's marginal character distribution to the training data's character frequencies.
 
 ![Character frequency comparison](figures/char_frequency_comparison.png)
 
-*Figure 4.1: Character frequency distribution in the training data (blue) versus samples from the trained last-embedding model (red) for the 30 most frequent characters. The model closely matches the data distribution, confirming that it learns character-level statistics but nothing about longer-range structure.*
+*Figure 4.1: Character frequency distribution in the training data (blue) versus samples from the trained last-embedding model (red) for the 30 most frequent characters. The model closely matches the data distribution.*
+
+But the model cannot learn anything beyond these pairwise statistics. Consider the contexts "th" and "sh": both end with "h", so the model predicts the same distribution after both. In the data, "th" is followed by "e" nearly half the time (for "the", "them", "there", ...) while "sh" is followed by "a" and "e" more evenly ("shall", "she", ...). Figure 4.2 shows this gap: the true next-character distributions (blue, green) differ across contexts, but the model's prediction (red) is identical because it only sees the final character.
+
+![Bigram comparison](figures/bigram_comparison.png)
+
+*Figure 4.2: The last-embedding model cannot distinguish contexts that end with the same character. Each panel shows two 2-character contexts with the same final character. The data's next-character distributions (blue, green) differ, but the model (red) predicts the same thing for both.*
 
 ### 4.2 Average all embeddings
 
@@ -216,7 +222,7 @@ $$
 
 ![Training curves: baselines](figures/training_curves_baselines.png)
 
-*Figure 4.2: Training loss for the two baseline models. Average pooling achieves **higher** loss than last-embedding-only. Equal weighting dilutes the signal: averaging 128 embeddings pushes the representation toward zero, losing the character-specific information that the last-embedding model exploits. Using context naively is worse than ignoring it.*
+*Figure 4.3: Training loss for the two baseline models. Average pooling achieves **higher** loss than last-embedding-only. Equal weighting dilutes the signal: averaging 128 embeddings pushes the representation toward zero, losing the character-specific information that the last-embedding model exploits. Using context naively is worse than ignoring it.*
 
 ### 4.3 Weighted combinations and softmax normalization
 
@@ -280,11 +286,11 @@ $$
 e_{\text{final},t} = \sum_{i=1}^{t} \operatorname{softmax}\!\left(\frac{(W_K E_{1:t})^T (W_Q e_t)}{\sqrt{d}}\right)_i (W_V e_i).
 $$
 
-**Training comparison.** Figure 4.3 compares all six model variants developed in this section. Each adds one component: (1) last embedding only, (2) average pooling, (3) softmax attention on raw embeddings, (4) shared $W$ transformation, (5) separate $W_Q$/$W_K$, (6) full $W_Q$/$W_K$/$W_V$.
+**Training comparison.** Figure 4.4 compares all six model variants developed in this section. Each adds one component: (1) last embedding only, (2) average pooling, (3) softmax attention on raw embeddings, (4) shared $W$ transformation, (5) separate $W_Q$/$W_K$, (6) full $W_Q$/$W_K$/$W_V$.
 
 ![Training curves: attention variants](figures/training_curves_attention.png)
 
-*Figure 4.3: Training loss vs. optimization step for six model variants on character-level Shakespeare ($d = 256$, $10{,}000$ steps). Average pooling performs worst due to signal dilution. The attention variants cluster near the last-embedding baseline (~2.4 nats/char), providing only marginal improvement. Single-layer attention without a feed-forward network or residual connection is not substantially more powerful than a learned bigram model for this task. The big improvements come from stacking full transformer blocks (Section 5).*
+*Figure 4.4: Training loss vs. optimization step for six model variants on character-level Shakespeare ($d = 256$, $10{,}000$ steps). Average pooling performs worst due to signal dilution. The attention variants cluster near the last-embedding baseline (~2.4 nats/char), providing only marginal improvement. Single-layer attention without a feed-forward network or residual connection is not substantially more powerful than a learned bigram model for this task. The big improvements come from stacking full transformer blocks (Section 5).*
 
 ### 4.5 The matrix formulation
 
@@ -312,7 +318,7 @@ The $-\infty$ entries cause $\exp(-\infty) = 0$ in the softmax, so position $t$ 
 
 ![Causal attention mask and attention weights](figures/attention_mask_heatmap.png)
 
-*Figure 4.4: Left: the causal mask for a 12-token sequence. White entries are $0$ (attend); dark entries are $-\infty$ (block). Right: attention weights after softmax. Each row sums to $1$ and only attends to earlier (or equal) positions.*
+*Figure 4.5: Left: the causal mask for a 12-token sequence. White entries are $0$ (attend); dark entries are $-\infty$ (block). Right: attention weights after softmax. Each row sums to $1$ and only attends to earlier (or equal) positions.*
 
 The matrix $\operatorname{Attn}(E)$ is $T \times d$. Row $t$ is a weighted combination of the value vectors $\lbrace v_1, \ldots, v_t\rbrace$, where the weights are determined by how well query $t$ matches keys $1, \ldots, t$. This mechanism was introduced in ["Attention Is All You Need" (Vaswani et al., 2017)](https://papers.nips.cc/paper_files/paper/2017/hash/3f5ee243547dee91fbd053c1c4a845aa-Abstract.html){:target="_blank"}, the paper that established the transformer architecture.
 
@@ -406,7 +412,7 @@ Define $E_{\text{final}} = E_L$. Each block has its own learnable parameters: th
 
 ![Training curves: transformer depth](figures/training_curves_depth.png)
 
-*Figure 5.2: Training loss vs. optimization step for transformers with 1, 2, 4, and 8 layers on character-level Shakespeare ($d = 256$, $10{,}000$ steps). Deeper models achieve lower training loss. The gap between 1 and 2 layers is substantial; returns diminish as depth increases further. Compare to Figure 4.3: adding the full transformer block (attention + residual + MLP) produces far larger gains than any of the attention-only variants.*
+*Figure 5.2: Training loss vs. optimization step for transformers with 1, 2, 4, and 8 layers on character-level Shakespeare ($d = 256$, $10{,}000$ steps). Deeper models achieve lower training loss. The gap between 1 and 2 layers is substantial; returns diminish as depth increases further. Compare to Figure 4.4: adding the full transformer block (attention + residual + MLP) produces far larger gains than any of the attention-only variants.*
 
 ### 5.5 PyTorch implementation
 
@@ -620,9 +626,17 @@ BPE sequences are roughly $4\times$ shorter, which quadratically reduces attenti
 
 *Figure 7.1: Training loss for 4-layer transformers with sinusoidal positional encoding ($d = 256$, $3{,}000$ steps) trained on character-level vs. BPE tokenization. The losses are not directly comparable because the models predict different-sized tokens. The BPE model has $28.6\text{M}$ parameters (vs. $2.9\text{M}$ for char-level) due to its $50{,}257$-token embedding table; with only $304{,}000$ training tokens, the BPE model is significantly undertrained relative to its capacity.*
 
-![BPE samples](figures/bpe_samples.png)
+Here are samples from both models (temperature $0.8$):
 
-*Figure 7.2: Generated text from the character-level and BPE models. The BPE model produces more coherent words because each token is a subword unit, but both models are trained for the same number of steps on a small-scale architecture.*
+**Char-level (vocab = 65):**
+
+> Let me knocked with us, some call him to the sorrow. VOLUMNIA: Before it in Christians are Forbituous a sweet, Be in pitcher with all one exileness, and you are tale to the earth of a blow be to the dark. I save thy king my clouck, Deserve here and yet him hence lives their tred, Or call'd of that
+
+**BPE (vocab = 50,257):**
+
+> AUTOLYCUS: Ay, with mere him, Bohemia You have respected appear: and I have this: offer'd Norfolk, The garter for the getting a tinker's truth! You that's the chosen: whom should they are ignorant, Though calved I' the porch o' the Capitol-- this admits Aed with me; 'tis a
+
+The BPE model produces more coherent words because each token is already a subword unit, but both models are trained for the same number of steps on a small-scale architecture.
 
 ## 8. Conclusion
 
@@ -637,17 +651,22 @@ All scripts are in the `script/` directory and read shared utilities from `scrip
 
 Loads the trained last-embedding checkpoint, generates 50,000 characters, and compares the character frequency distribution to the training data. The top 30 characters are shown as a grouped bar chart.
 
-### Figure 4.2: Baseline training curves
+### Figure 4.2: Bigram limitation
+**File:** `script/plot_bigram_comparison.py` → `figures/bigram_comparison.png`
+
+Shows that the last-embedding model cannot distinguish different 2-character contexts that end with the same character. Three panels compare data trigram distributions to the model's context-independent prediction.
+
+### Figure 4.3: Baseline training curves
 **File:** `script/train_attention_variants.py` → `figures/training_curves_baselines.png`
 
 Training loss for last-embedding and average pooling models ($d=256$, 10,000 steps).
 
-### Figure 4.3: Attention variant training curves
+### Figure 4.4: Attention variant training curves
 **File:** `script/train_attention_variants.py` → `figures/training_curves_attention.png`
 
 Training loss for all six attention variants: last embedding, average pooling, softmax attention (raw embeddings), shared W, separate Q/K, full Q/K/V.
 
-### Figure 4.4: Causal mask and attention weights
+### Figure 4.5: Causal mask and attention weights
 **File:** `script/plot_attention_mask_heatmap.py` → `figures/attention_mask_heatmap.png`
 
 Two-panel figure: (left) binary causal mask for $T=12$, (right) attention weights after softmax.
