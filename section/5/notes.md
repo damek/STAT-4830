@@ -519,6 +519,78 @@ Here are 300-character samples from four of our trained models, generated autore
 > When they law often ears thou enear the dates them no will of meen
 > I from your high
 
+### 5.7 Temperature
+
+The samples above were generated at **temperature** $\tau = 0.8$. Temperature is a single scalar that controls the sharpness of the sampling distribution. At each step, the model computes scores $s = (E_{\text{final}} W_{\text{head}}^T)_{t,:} \in \mathbb{R}^{\vert V\vert}$ for the next token. We divide by $\tau$ before applying softmax:
+
+$$
+p(x_{t+1} = v \mid x_1, \ldots, x_t) = \frac{\exp(s_v / \tau)}{\sum_{v'} \exp(s_{v'} / \tau)}.
+$$
+
+- $\tau = 1$: the raw learned distribution, unchanged.
+- $\tau < 1$: the distribution sharpens. High-probability tokens become even more likely. As $\tau \to 0$, sampling converges to always picking the single most likely token (greedy decoding).
+- $\tau > 1$: the distribution flattens. Low-probability tokens get a larger share. As $\tau \to \infty$, the distribution approaches uniform over the vocabulary.
+
+Figure 5.3 shows this concretely. We feed the context `KING RICHARD II:\n` into the 4-layer transformer and plot the resulting probability over the 15 highest-scoring tokens at five temperatures.
+
+![Temperature effect on next-token distribution](figures/temperature_effect.png)
+
+*Figure 5.3: Next-token probabilities after the context "KING RICHARD II:\n" at five temperatures. At $\tau = 0.2$, nearly all mass concentrates on "S" and "T" (the most common first letters of speech lines). At $\tau = 1.5$, the distribution is nearly flat and rare continuations become almost as likely as common ones.*
+
+In code, this is one line: divide the scores by $\tau$ before `softmax`.
+
+```python
+scores = model(context)[0, -1, :]   # shape (|V|,) — next-token scores
+scores = scores / temperature        # scale
+probs = torch.softmax(scores, dim=-1)
+next_token = torch.multinomial(probs, 1)
+```
+
+Here are 200-character samples from the same 4-layer transformer at five temperatures:
+
+**$\tau = 0.2$** (near-greedy: repetitive, safe)
+
+> LUCIO:
+> Well, well, my lord, I will be not a subject of the death of the dead that the rest,
+> And so the commoner of my son and the state of my heart.
+
+**$\tau = 0.5$** (moderately sharp: coherent, limited variety)
+
+> KING RICHARD II:
+> Sweet when I was all not so farewell,
+> And see him to come and by that strength to be the commoney.
+>
+> ANGELO:
+> I have all the flatteriest of her no more.
+
+**$\tau = 0.8$** (default: readable with some creativity)
+
+> KING RICHARD II:
+> The duke: sure, thou noble courteor.
+>
+> DUKE OF AUMERLE:
+> Provost, and let us not so,
+> To please upon mine earth. Come, like thy house:
+> Mercy harm of my prevail is like the contract,
+
+**$\tau = 1.0$** (raw distribution: occasional misspellings, more variety)
+
+> KING LEWIS XI:
+> No, monstrous and over nobled fe thy effer he deputy;
+> To dreamts we maid the north,
+> Must be it uncertain fame ne'er in his chalf
+> cold offend and gone.
+
+**$\tau = 1.5$** (flattened: frequent nonsense, rare tokens appear)
+
+> Likely, for this natural childrent to anquen'd.
+>  KING EDWARD IV:
+> No; and I, Rotak, to; 'God, no neek
+> utting in'u
+> cersit that Ine'd no honour flescily of
+
+The pattern: low temperature produces safe, repetitive text; high temperature introduces variety at the cost of coherence. Most deployed language models sample at $\tau$ between $0.7$ and $1.0$.
+
 ## 6. Practical additions
 
 The architecture in Section 5 captures the core structure of a transformer. Three additional components are standard in practice.
