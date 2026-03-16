@@ -641,7 +641,7 @@ The BPE model produces more coherent words because each token is already a subwo
 ## 8. Conclusion
 
 We built a transformer from first principles: starting with raw embeddings, we added weighted combinations, softmax normalization, $\sqrt{d}$ scaling, learned query/key/value transformations, residual connections, and feed-forward layers. The resulting architecture — stacked transformer blocks trained with next-token prediction loss — is the foundation of modern language models. Adding positional encodings gives the model explicit position information, and byte pair encoding compresses the input for more efficient training. Next lecture, we turn to training these models at scale.
-
+<!-- 
 ## Appendix: figure generation scripts
 
 All scripts are in the `script/` directory and read shared utilities from `script/common.py`. Run from the `script/` directory.
@@ -694,4 +694,4 @@ Training loss for 4-layer transformer with and without sinusoidal positional enc
 ### Figures 7.1–7.2: BPE comparison
 **File:** `script/train_bpe_comparison.py` → `figures/bpe_comparison.png`, `figures/bpe_samples.png`
 
-Training loss and generated samples comparing character-level and BPE tokenization on a 4-layer transformer.
+Training loss and generated samples comparing character-level and BPE tokenization on a 4-layer transformer. -->
