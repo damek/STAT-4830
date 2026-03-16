@@ -414,6 +414,14 @@ Define $E_{\text{final}} = E_L$. Each block has its own learnable parameters: th
 
 *Figure 5.2: Training loss vs. optimization step for transformers with 1, 2, 4, and 8 layers on character-level Shakespeare ($d = 256$, $10{,}000$ steps). Deeper models achieve lower training loss. The gap between 1 and 2 layers is substantial; returns diminish as depth increases further. Compare to Figure 4.4: adding the full transformer block (attention + residual + MLP) produces far larger gains than any of the attention-only variants.*
 
+#### 5.4.1 Stacking attention-only blocks
+
+How much of the improvement in Figure 5.2 comes from the MLP? We can isolate the contribution by stacking **attention-only blocks** — each block computes $E \leftarrow E + \operatorname{Attn}(E)$, with no feed-forward network. The residual connection is still present, so we can stack multiple layers.
+
+![Training curves: attention-only depth](figures/training_curves_attn_only_depth.png)
+
+*Figure 5.2.1: Training loss for attention-only blocks (no MLP) at depths 1, 2, 4, and 8 ($d = 256$, $10{,}000$ steps). Stacking attention layers with residual connections does improve performance: the 8-layer attention-only model reaches $\approx 1.50$ nats/char. But compare to the full transformer block in Figure 5.2: the 4-layer full transformer ($\approx 1.25$) beats the 8-layer attention-only model, and the 2-layer full transformer ($\approx 1.63$) beats the 4-layer attention-only ($\approx 1.88$). The MLP provides substantial additional capacity at every depth.*
+
 ### 5.5 PyTorch implementation
 
 Here is a complete, runnable transformer built from the components above.
@@ -501,7 +509,19 @@ Here are 300-character samples from four of our trained models, generated autore
 
 > Be nous f athecalind wn t de thatho acicrmathiliny and be; cindyosthanf bun, ound isiber ithin thalpes s ibo wourr ofouloutanoty ngtrarel: torshimare't an he o t m'seme he foditig he oupo ferstheeathourer outhe, edsben athan ane cost lebritokseaththeror at pet teclly le hay sean tha wanthesinthellt
 
-**(d) 4-Layer Transformer.** Recognizable formatting with line breaks, character names, and English words:
+**(d) 4-Layer Attention-Only (no MLP).** Formatting and common word fragments appear, but many nonsense words remain ("noblod," "ereat," "brenath"). Compare to (e) below — the MLP makes a visible difference:
+
+> My thou for dunay and are the a our of noblod te the ereat hes er magre,
+> Are chand thall king, they but the in'u
+> ce sie the men.
+>
+> First Lon low of lie her and how not brenath if likest
+> Thy cherear, but men court thinke anown;
+> Than like ward
+> Therr: my and momean a ques
+> Thes to souch, by the my and br
+
+**(e) 4-Layer Transformer.** Recognizable formatting with line breaks, character names, and English words:
 
 > That by it be encountere of his brother.
 >
@@ -631,7 +651,7 @@ Many modern architectures use learned positional encodings or relative position 
 
 *Figure 6.1: Training loss for a 4-layer transformer with and without sinusoidal positional encoding ($d = 256$, $10{,}000$ steps). Positional encoding provides a consistent advantage, particularly later in training when the model has learned enough structure to exploit position information.*
 
-Here is a sample from the 4-layer transformer with positional encoding (compare to sample (d) in §5.6):
+Here is a sample from the 4-layer transformer with positional encoding (compare to sample (e) in §5.6):
 
 > Shall uncle you sure
 > That he has merry to me a power: if
