@@ -24,15 +24,13 @@ title: Table of Contents
 [4. Loss functions and models for regression and classification problems](section/4/notes.md) | [Live demo](https://colab.research.google.com/github/damek/STAT-4830/blob/main/section/4/live-demo.ipynb)
    > Formulate ML objectives, choose losses for regression/classification, and build/train linear and convolutional models in PyTorch.
 
+[5. A step-by-step introduction to transformer models](section/5/notes.md)
+   > Building transformers from scratch: embeddings, attention, residual connections, and next-token prediction on Shakespeare.
+
    
 ---
 
 Some 2025 content below; yet to be deleted.
-
-
-
-[5. How to think about derivatives through best linear approximation](section/5/notes.md)
-   > How to think about derivatives through best linear approximation.
 
 [6. Stochastic gradient descent: A first look](section/6/notes.md)
    > A first look at stochastic gradient descent through the mean estimation problem.

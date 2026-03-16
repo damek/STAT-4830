@@ -20,8 +20,8 @@ title: Table of Contents
 [4. How to compute gradients in PyTorch](section/4/notes.md) | [Slides](section/4/slides.pdf) | [Notebook](https://colab.research.google.com/github/damek/STAT-4830/blob/main/archive/2025/section/4/notebook.ipynb)
    > Introduction to PyTorch's automatic differentiation system.
 
-[5. How to think about derivatives through best linear approximation](section/5/notes.md)
-   > How to think about derivatives through best linear approximation.
+[5. A step-by-step introduction to transformer models](section/5/notes.md)
+   > Building transformers from scratch: embeddings, attention, residual connections, and next-token prediction on Shakespeare.
 
 [6. Stochastic gradient descent: A first look](section/6/notes.md)
    > A first look at stochastic gradient descent through the mean estimation problem.
