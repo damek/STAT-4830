@@ -28,7 +28,7 @@ Today the setup changes. We have **sequence data** $(x_1, \ldots, x_T)$ and no l
 
 The goal: learn to **generate** and **continue** sequences that resemble those in the training data, and that extrapolate beyond them in a consistent way. Given the rise of tools like ChatGPT and Claude, you already know why this matters.
 
-**Our running example.** Throughout this lecture we train on a character-level Shakespeare dataset ([source](https://github.com/karpathy/char-rnn/tree/master/data/tinyshakespeare){:target="_blank"}) consisting of approximately 1.1 million characters. Here is a representative excerpt:
+**Our running example.** Throughout this lecture we train on a Shakespeare dataset ([source](https://github.com/karpathy/char-rnn/tree/master/data/tinyshakespeare){:target="_blank"}) consisting of approximately 1.1 million characters. Here is a representative excerpt:
 
 ```
 First Citizen:
@@ -117,7 +117,7 @@ $$
 p(\text{next token} \mid x_1, \ldots, x_T).
 $$
 
-The `<bos>` token is always present at position $0$, so $p(x_1)$ really means "probability of $x_1$ given the start-of-sequence marker." We leave this conditioning implicit in all equations that follow.
+The `<bos>` token is always present at position $0$, so $p(x_1)$ really means $p(x_1 \mid \langle\text{bos}\rangle)$. We leave this conditioning implicit in all equations that follow.
 
 Once we have this distribution, generation works as follows:
 
@@ -170,7 +170,7 @@ $$
 p_\theta(X) = p_\theta(x_1) \cdot p_\theta(x_2 \mid x_1) \cdots p_\theta(x_T \mid x_1, \ldots, x_{T-1}).
 $$
 
-Recall that `<bos>` is always implicitly prepended, so $p_\theta(x_1)$ conditions on the start-of-sequence marker.
+Recall that `<bos>` is always implicitly prepended, so $p_\theta(x_1) = p_\theta(x_1 \mid \langle\text{bos}\rangle)$.
 
 Optimizing a product of many small probabilities is numerically fragile: the product can underflow to zero. Taking the negative log converts the product into a sum:
 
@@ -178,13 +178,15 @@ $$
 \min_\theta \sum_{X \in \mathcal{X}} \sum_{t=1}^{T} -\log p_\theta(x_t \mid x_1, \ldots, x_{t-1}).
 $$
 
-This is the **next-token prediction loss**. Each term $-\log p_\theta(x_t \mid \cdots)$ penalizes the model for assigning low probability to the token that actually appeared. Minimizing this objective trains the model to be a good next-token predictor across all positions in all training sequences.
+This is the **next-token prediction loss**. Each term $-\log p_\theta(x_t \mid \cdots)$ penalizes the model for assigning low probability to the token that actually appeared. Because $\log$ is the natural logarithm, the loss is measured in **nats** (natural units of information); dividing by the number of tokens gives **nats per token**. A model that assigns uniform probability over $\vert V\vert = 65$ tokens has loss $\log 65 \approx 4.17$ nats/token; any value below this indicates the model has learned something.
+
+In practice the sum over all sequences is too expensive to compute at each step. Instead we estimate it by sampling a random **mini-batch** of $B$ subsequences of length $T$ from the training data, computing the average loss over the batch, and taking one gradient step. In our experiments we use $B = 64$ and $T = 128$. Minimizing this stochastic estimate trains the model to be a good next-token predictor across all positions in all training sequences.
 
 ## 4. Building attention step by step
 
 We now turn to the central question: how do we go from the embedding matrix $E$ to $E_{\text{final}}$?
 
-**Experimental setup.** To make the comparison concrete, we train each model variant on character-level Shakespeare with $\vert V\vert = 65$, embedding dimension $d = 256$, sequence length $128$, batch size $64$, Adam optimizer with learning rate $3 \times 10^{-4}$, and $10{,}000$ training steps. We use $d = 256$ rather than the typical $d = 768$ to keep training feasible on a laptop; the architectural insights are the same.
+**Experimental setup.** To make the comparison concrete, we train each model variant on character-level Shakespeare with $\vert V\vert = 65$, embedding dimension $d = 256$, sequence length $128$, batch size $64$, Adam optimizer with learning rate $3 \times 10^{-4}$, and $10{,}000$ training steps.
 
 ### 4.1 Predict from the last embedding alone
 
@@ -312,7 +314,7 @@ The $-\infty$ entries cause $\exp(-\infty) = 0$ in the softmax, so position $t$ 
 
 *Figure 4.4: Left: the causal mask for a 12-token sequence. White entries are $0$ (attend); dark entries are $-\infty$ (block). Right: attention weights after softmax. Each row sums to $1$ and only attends to earlier (or equal) positions.*
 
-This mechanism was introduced in ["Attention Is All You Need" (Vaswani et al., 2017)](https://papers.nips.cc/paper_files/paper/2017/hash/3f5ee243547dee91fbd053c1c4a845aa-Abstract.html){:target="_blank"}.
+The matrix $\operatorname{Attn}(E)$ is $T \times d$. Row $t$ is a weighted combination of the value vectors $\lbrace v_1, \ldots, v_t\rbrace$, where the weights are determined by how well query $t$ matches keys $1, \ldots, t$. This mechanism was introduced in ["Attention Is All You Need" (Vaswani et al., 2017)](https://papers.nips.cc/paper_files/paper/2017/hash/3f5ee243547dee91fbd053c1c4a845aa-Abstract.html){:target="_blank"}, the paper that established the transformer architecture.
 
 ```python
 import torch
@@ -360,7 +362,7 @@ $$
 
 This is a **residual connection**. The model can learn to use the attention output as a correction to the original embeddings rather than replacing them entirely.
 
-Why does this help? Residual connections improve the **conditioning** of the optimization problem. When the transformation is the identity plus a small perturbation, the loss landscape near initialization is better behaved and gradient descent makes more reliable progress. We have not covered conditioning formally in this course, so take this as a working hypothesis rather than a theorem.
+Why does this help? You will find all sorts of explanations online ("it keeps the gradient flowing," etc.). Most of them are hand-wavy. My best guess is that residual connections improve the **conditioning** of the optimization problem. Conditioning is not something we have covered in this course, and I have not verified this claim carefully, but that is where I would start if pressed for an explanation.
 
 ### 5.2 The feed-forward network
 
@@ -479,11 +481,37 @@ for name, p in model.named_parameters():
 
 ### 5.6 Generating text
 
-Figure 5.3 shows text sampled from several model variants after training.
+Here are 300-character samples from four of our trained models, generated autoregressively at temperature $0.8$.
 
-![Sample text from different models](figures/sample_text_comparison.png)
+**(a) Last Embedding Only.** Output reflects character-pair frequencies but has no sequential structure:
 
-*Figure 5.3: Text sampled from trained models. (a) Last-embedding-only: output reflects character frequencies but has no sequential structure. (b) Average pooling: some character-level patterns emerge. (c) Single-layer Q/K/V attention: word-like structure appears. (d) 4-layer transformer: recognizable formatting with line breaks and character names. (e) 4-layer transformer with positional encoding: improved coherence.*
+> Wh shinal dawome usio ith by thy ghe t trongat prerend thin e ime mmas y I r d: HAng, bo th'ewe Buraithe ale e ant stafr onour nor ghere thisuls acoupren'stofo hed winoothans Pr I grou ay che lombood, blles thatig. TEYouthe l telve that. There ild I'd e: RLerirondeisthe pr s t s, thellknge worir, f
+
+**(b) Average Pooling.** The signal is diluted by equal weighting; the output is less coherent than (a):
+
+> ICES:ehan t sf woihaldl,' am ladatfr fti,thypwioeoe yontld e sel,ooe s : crhht n teeou e u eetreWwsisrb r e yltdomshl he moelr rndirad le peh hhteenseba yt bfouiu.hmttcsasece rnneeb siaebhh em.Knete;twott ehoesr u sw tr tsoT,''esaaoult ncdt amholyft A er se: ohs ac t ra o wst a b I o
+
+**(c) Single-Layer Q/K/V Attention.** Some word-like patterns emerge, but no real English words:
+
+> Be nous f athecalind wn t de thatho acicrmathiliny and be; cindyosthanf bun, ound isiber ithin thalpes s ibo wourr ofouloutanoty ngtrarel: torshimare't an he o t m'seme he foditig he oupo ferstheeathourer outhe, edsben athan ane cost lebritokseaththeror at pet teclly le hay sean tha wanthesinthellt
+
+**(d) 4-Layer Transformer.** Recognizable formatting with line breaks, character names, and English words:
+
+> That by it be encountere of his brother.
+>
+> MARCIUS:
+> Well, and you come? o, sir, I think, so gentlemen.
+>
+> MARIANA:
+> I have done enoumenance.
+>
+> MARCIUS:
+> One how the househer to my lord.
+>
+> SICINIUS:
+> Your honour's warrs dead:
+> When they law often ears thou enear the dates them no will of meen
+> I from your high
 
 ## 6. Practical additions
 
@@ -524,6 +552,19 @@ Many modern architectures use learned positional encodings or relative position 
 ![Training curves: positional encoding](figures/training_curves_posenc.png)
 
 *Figure 6.1: Training loss for a 4-layer transformer with and without sinusoidal positional encoding ($d = 256$, $10{,}000$ steps). Positional encoding provides a consistent advantage, particularly later in training when the model has learned enough structure to exploit position information.*
+
+Here is a sample from the 4-layer transformer with positional encoding (compare to sample (d) in §5.6):
+
+> Shall uncle you sure
+> That he has merry to me a power: if
+> your agger and as she
+> And prive as 'twere myself; for if the strength of a soldiers.
+>
+> Third Servingman:
+> Shall this have touch mind incontent him!
+> I say, if you discharge for such lord's sweetest
+> Make mine of me, but then in his hireit:
+> Whilst
 
 ### 6.3 Multiple attention heads
 
@@ -573,11 +614,11 @@ The tradeoffs:
 | Embedding table params ($d = 256$) | $16{,}640$ | $12{,}865{,}792$ |
 | Attention cost per step | $T^2 = 25\text{M}$ | $T^2 = 1.7\text{M}$ |
 
-BPE sequences are roughly $4\times$ shorter, which quadratically reduces attention cost. But the embedding table is $800\times$ larger. For large models where $d$ is much bigger than $\vert V\vert$, this overhead is negligible. For our small $d = 256$ models, the BPE embedding table dominates the parameter count.
+BPE sequences are roughly $4\times$ shorter, which quadratically reduces attention cost. The $T^2$ factor comes from the attention score matrix $QK^T \in \mathbb{R}^{T \times T}$: every position's query is compared to every other position's key, so the computation scales as $T^2$. Cutting $T$ by $4\times$ reduces this cost by $16\times$. But the embedding table is $800\times$ larger. For large models where $d$ is much bigger than $\vert V\vert$, this overhead is negligible. For our small $d = 256$ models, the BPE embedding table dominates the parameter count.
 
 ![BPE comparison](figures/bpe_comparison.png)
 
-*Figure 7.1: Training loss for 4-layer transformers (with positional encoding, $d = 256$, $3{,}000$ steps) trained on character-level vs. BPE tokenization. The losses are not directly comparable because the models predict different-sized tokens. The BPE model has $28.6\text{M}$ parameters (vs. $2.9\text{M}$ for char-level) due to its $50{,}257$-token embedding table.*
+*Figure 7.1: Training loss for 4-layer transformers with sinusoidal positional encoding ($d = 256$, $3{,}000$ steps) trained on character-level vs. BPE tokenization. The losses are not directly comparable because the models predict different-sized tokens. The BPE model has $28.6\text{M}$ parameters (vs. $2.9\text{M}$ for char-level) due to its $50{,}257$-token embedding table; with only $304{,}000$ training tokens, the BPE model is significantly undertrained relative to its capacity.*
 
 ![BPE samples](figures/bpe_samples.png)
 
@@ -621,10 +662,10 @@ Vertical flow diagram of a single transformer block with attention, MLP, and res
 
 Training loss for transformers with 1, 2, 4, and 8 layers ($d=256$, 10,000 steps).
 
-### Figure 5.3: Sample text comparison
-**File:** `script/generate_samples.py` → `figures/sample_text_comparison.png`
+### Text samples (§5.6 and §6.2)
+**File:** `script/generate_samples.py`
 
-Generated text from five trained models: last-embedding, average pooling, Q/K/V attention, 4-layer transformer, 4-layer transformer with positional encoding.
+Generates text from trained model checkpoints. The samples shown in §5.6 and §6.2 were produced by this script at temperature $0.8$.
 
 ### Figure 6.1: Positional encoding comparison
 **File:** `script/train_transformer_depth.py` → `figures/training_curves_posenc.png`
