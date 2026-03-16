@@ -12,14 +12,13 @@ title: A step-by-step introduction to transformer models
 4. [Building attention step by step](#4-building-attention-step-by-step)
 5. [The transformer block](#5-the-transformer-block)
 6. [Practical additions](#6-practical-additions)
-7. [Conclusion](#7-conclusion)
-8. [Appendix: prompts, scripts, and unit tests for figures](#appendix-prompts-scripts-and-unit-tests-for-figures)
-
----
+7. [Byte pair encoding](#7-byte-pair-encoding)
+8. [Conclusion](#8-conclusion)
+9. [Appendix: figure generation scripts](#appendix-figure-generation-scripts)
 
 ## 1. From prediction to generation
 
-Last lecture we had data as pairs $(x_i, y_i)$ -- inputs and targets -- and we learned a model $m(x; w)$ to predict $y$ from $x$. We built linear models (linear regression, logistic regression) and nonlinear models (multi-layer perceptrons, convolutional neural networks). In every case, the task was supervised: given an input, produce a target.
+Last lecture we had data as pairs $(x_i, y_i)$ and learned a model $m(x; w)$ to predict $y$ from $x$. We built linear models (linear regression, logistic regression) and nonlinear models (multi-layer perceptrons, convolutional neural networks). In every case the task was supervised: given an input, produce a target.
 
 Today the setup changes. We have **sequence data** $(x_1, \ldots, x_T)$ and no label $y$. Examples:
 
@@ -29,9 +28,26 @@ Today the setup changes. We have **sequence data** $(x_1, \ldots, x_T)$ and no l
 
 The goal: learn to **generate** and **continue** sequences that resemble those in the training data, and that extrapolate beyond them in a consistent way. Given the rise of tools like ChatGPT and Claude, you already know why this matters.
 
-So how do we design such models?
+**Our running example.** Throughout this lecture we train on a character-level Shakespeare dataset ([source](https://github.com/karpathy/char-rnn/tree/master/data/tinyshakespeare){:target="_blank"}) consisting of approximately 1.1 million characters. Here is a representative excerpt:
 
----
+```
+First Citizen:
+Before we proceed any further, hear me speak.
+
+All:
+Speak, speak.
+
+First Citizen:
+You are all resolved rather to die than to famish?
+
+All:
+Resolved. resolved.
+
+First Citizen:
+First, you know Caius Marcius is chief enemy to the people.
+```
+
+The vocabulary consists of 65 characters: uppercase and lowercase letters, digits, punctuation, spaces, and newlines.
 
 ## 2. Vocabularies, tokenization, and embeddings
 
@@ -44,27 +60,25 @@ Several choices:
 - **Characters and digits.** Small vocabulary ($\vert V\vert \approx 100$). Every sentence becomes a long sequence of characters. Simple, but the sequences are long and relationships between distant characters can be hard to learn.
 - **Words.** Large vocabulary ($\vert V\vert$ could be $100{,}000+$). Sequences are shorter, but the embedding table grows with $\vert V\vert$.
 
-There is a tradeoff. Smaller vocabularies produce longer sequences that may be harder to optimize, though the optimization problem itself has fewer parameters per token. Larger vocabularies give shorter sequences but inflate the model's embedding table and the final prediction layer.
+Smaller vocabularies produce longer sequences that may be harder to optimize, though the optimization problem itself has fewer parameters per token. Larger vocabularies give shorter sequences but inflate the model's embedding table and the final prediction layer. In practice, modern language models use a middle ground called **byte pair encoding (BPE)**, which we discuss in Section 7. BPE builds a vocabulary of subword units by iteratively merging frequent adjacent pairs. Typical BPE vocabularies have $50{,}000$ to $150{,}000$ tokens. For now we use the character-level vocabulary ($\vert V\vert = 65$) to keep things simple.
 
-In practice, modern language models use a middle ground called **byte pair encoding (BPE)**. BPE builds a vocabulary of subword units by iteratively merging the most frequent adjacent pairs of tokens. The resulting vocabulary typically has $50{,}000$ to $150{,}000$ tokens. The mechanics of BPE are not essential for this lecture, but [this interactive demo](https://www.cs.cornell.edu/courses/cs4782/2026sp/demos/bytepair/){:target="_blank"} is worth exploring.
+We also use two **special tokens**:
 
-We also add two **special tokens** to the vocabulary:
-
-- `<bos>` (**beginning of sequence**): a marker prepended to every sequence. It gives the model a fixed starting point for generation.
-- `<eos>` (**end of sequence**): a marker that signals when generation should stop.
+- `<bos>` (**beginning of sequence**): prepended to every sequence. It gives the model a fixed starting point for generation.
+- `<eos>` (**end of sequence**): signals when generation should stop.
 
 ### 2.2 From tokens to vectors: embeddings
 
-Once we have a vocabulary, we need to convert each token into something we can do linear algebra on: a vector.
+Once we have a vocabulary, we need to convert each token into a vector we can do linear algebra on.
 
-For each token $v \in V$, we assign a learnable **embedding vector** $e_v \in \mathbb{R}^d$. There are $\vert V\vert$ such vectors, one per token, collected into an **embedding matrix** $E_{\text{vocab}} \in \mathbb{R}^{\vert V\vert \times d}$. These embedding vectors are **learned parameters**. We typically initialize them as random Gaussian vectors and let gradient descent shape them during training.
+For each token $v \in V$, we assign a learnable **embedding vector** $e_v \in \mathbb{R}^d$. There are $\vert V\vert$ such vectors, one per token, collected into an **embedding matrix** $E_{\text{vocab}} \in \mathbb{R}^{\vert V\vert \times d}$. These vectors are **learned parameters**: we initialize them as random Gaussian vectors and let gradient descent shape them during training.
 
 Typical embedding dimensions:
 
 - Small models: $d = 768$
 - Large models: $d$ up to $16{,}128$
 
-Both numbers are divisible by $128$. This is not a coincidence: GPU matrix multiplication is fastest when dimensions align to certain powers of $2$. You will see this divisibility pattern throughout deep learning architectures.
+Both numbers are divisible by $128$. GPU matrix multiplication is fastest when dimensions align to certain powers of $2$. You will see this divisibility pattern throughout deep learning architectures.
 
 Given a sequence $X = (x_1, \ldots, x_T)$ where each $x_t \in V$, the corresponding **embedding matrix** is
 
@@ -72,12 +86,14 @@ $$
 E = \begin{bmatrix} e_{x_1}^T \\ e_{x_2}^T \\ \vdots \\ e_{x_T}^T \end{bmatrix} \in \mathbb{R}^{T \times d}.
 $$
 
-Row $t$ is the embedding of the $t$-th token. The first axis is the sequence length, consistent with the batch-first convention from last lecture.
+Row $t$ is the embedding of the $t$-th token. The first axis is sequence length, consistent with the batch-first convention from last lecture.
+
+In PyTorch, `torch.nn.Embedding(vocab_size, d)` creates a lookup table that stores $\vert V\vert$ vectors of dimension $d$, initialized from $\mathcal{N}(0, 1)$. Given an integer tensor of token indices, it returns the corresponding rows of this table:
 
 ```python
 import torch
 
-vocab_size = 65   # e.g., printable ASCII characters
+vocab_size = 65
 d = 768
 
 embedding = torch.nn.Embedding(vocab_size, d)
@@ -85,11 +101,9 @@ embedding = torch.nn.Embedding(vocab_size, d)
 X = torch.tensor([18, 47, 56, 57, 1, 15, 47, 58, 1, 0])
 E = embedding(X)
 
-print("X.shape:", X.shape)   # (10,)
-print("E.shape:", E.shape)   # (10, 768)
+print("X.shape:", X.shape)   # torch.Size([10])
+print("E.shape:", E.shape)   # torch.Size([10, 768])
 ```
-
----
 
 ## 3. Next token prediction: the task and the loss
 
@@ -97,46 +111,48 @@ print("E.shape:", E.shape)   # (10, 768)
 
 We want to sample sequences that look like those in our training data, and we want to continue partial sequences. A minimal way to achieve both goals: learn to **predict the next token** in a sequence.
 
-Given an input sequence $X = (x_1, \ldots, x_T)$, we want a probability distribution
+Given a sequence $X = (x_1, \ldots, x_T)$ (with `<bos>` always prepended by convention), we want a probability distribution over what comes next:
 
 $$
-p(\text{next token} \mid \texttt{<bos>}, x_1, \ldots, x_T).
+p(\text{next token} \mid x_1, \ldots, x_T).
 $$
 
-The `<bos>` token lets us start from an empty sequence: $p(x_1 \mid \texttt{<bos>})$ gives a distribution over possible first tokens.
+The `<bos>` token is always present at position $0$, so $p(x_1)$ really means "probability of $x_1$ given the start-of-sequence marker." We leave this conditioning implicit in all equations that follow.
 
-Once we have this distribution, generation is straightforward:
+Once we have this distribution, generation works as follows:
 
-1. Sample $x_{T+1} \sim p(\cdot \mid \texttt{<bos>}, x_1, \ldots, x_T)$.
+1. Sample $x_{T+1} \sim p(\cdot \mid x_1, \ldots, x_T)$.
 2. Append $x_{T+1}$ to the sequence.
-3. Repeat: sample $x_{T+2} \sim p(\cdot \mid \texttt{<bos>}, x_1, \ldots, x_{T+1})$.
+3. Repeat: sample $x_{T+2} \sim p(\cdot \mid x_1, \ldots, x_{T+1})$.
 4. Stop when we reach a maximum number of new tokens or when the model emits `<eos>`.
 
 This is **autoregressive generation**: each new token is sampled conditional on everything before it.
 
-### 3.2 The model pipeline
+### 3.2 The model architecture
 
 Our model maps a sequence $X$ to next-token probabilities. This happens in stages:
 
 1. **Tokenize:** convert raw text into a sequence of token indices $X = (x_1, \ldots, x_T)$.
 2. **Embed:** look up embeddings to get $E \in \mathbb{R}^{T \times d}$.
-3. **Transform:** apply (possibly nonlinear) operations to produce $E_{\text{final}} \in \mathbb{R}^{T \times d}$.
+3. **Transform:** apply operations to produce $E_{\text{final}} \in \mathbb{R}^{T \times d}$.
 4. **Score:** compute $\text{scores} = E_{\text{final}} W_{\text{head}}^T \in \mathbb{R}^{T \times \vert V\vert}$.
 5. **Normalize:** apply softmax row-wise to get probabilities.
 
-The score matrix has shape $T \times \vert V\vert$. Entry $(t, v)$ is a real number in $(-\infty, \infty)$ measuring how likely token $v$ is to follow the first $t$ tokens of $X$. We are computing next-token scores for **every** prefix simultaneously:
+**Softmax** converts a vector of real numbers into a probability distribution. For a vector $z \in \mathbb{R}^n$:
 
 $$
-\text{score}(v \mid x_1, \ldots, x_t) \quad \text{for every } t \in \{1, \ldots, T\} \text{ and every } v \in V.
+\operatorname{softmax}(z)_i = \frac{\exp(z_i)}{\sum_{j=1}^n \exp(z_j)}, \qquad i = 1, \ldots, n.
 $$
 
-Converting scores to probabilities:
+Every output is positive (because $\exp$ maps reals to positive reals) and the outputs sum to $1$. Larger entries in $z$ get larger probabilities.
+
+The score matrix has shape $T \times \vert V\vert$. Entry $(t, v)$ measures how likely token $v$ is to follow the first $t$ tokens of $X$. We compute next-token scores for **every** prefix simultaneously:
 
 $$
 p(v \mid x_1, \ldots, x_t) = \operatorname{softmax}(E_{\text{final}} W_{\text{head}}^T)_{t,v}.
 $$
 
-Here $W_{\text{head}} \in \mathbb{R}^{\vert V\vert \times d}$ is a learnable weight matrix. Each row of $W_{\text{head}}$ is a "template vector" for one vocabulary token; the dot product with $e_{\text{final},t}$ produces that token's score at position $t$.
+Here $W_{\text{head}} \in \mathbb{R}^{\vert V\vert \times d}$ is a learnable weight matrix. Each row of $W_{\text{head}}$ is a template vector for one vocabulary token; the dot product with $e_{\text{final},t}$ produces that token's score at position $t$.
 
 The central question of this lecture: **how do we compute $E_{\text{final}}$ from $E$?**
 
@@ -148,156 +164,135 @@ $$
 \prod_{X \in \mathcal{X}} p_\theta(X).
 $$
 
-Here $\theta$ denotes all learnable parameters (embedding vectors, weight matrices in the transformation, the head matrix $W_{\text{head}}$). For a single sequence $X = (x_1, \ldots, x_T)$, the chain rule of probability gives
+Here $\theta$ denotes all learnable parameters (embedding vectors, weight matrices, the head matrix $W_{\text{head}}$). For a single sequence $X = (x_1, \ldots, x_T)$, the chain rule of probability gives
 
 $$
-p_\theta(X) = p_\theta(x_1 \mid \texttt{<bos>}) \cdot p_\theta(x_2 \mid \texttt{<bos>}, x_1) \cdots p_\theta(x_T \mid \texttt{<bos>}, x_1, \ldots, x_{T-1}).
+p_\theta(X) = p_\theta(x_1) \cdot p_\theta(x_2 \mid x_1) \cdots p_\theta(x_T \mid x_1, \ldots, x_{T-1}).
 $$
 
-Optimizing a product of many small probabilities is numerically fragile: the product can underflow to zero. It is also not directly amenable to stochastic gradient descent. Taking the negative log converts the product into a sum:
+Recall that `<bos>` is always implicitly prepended, so $p_\theta(x_1)$ conditions on the start-of-sequence marker.
+
+Optimizing a product of many small probabilities is numerically fragile: the product can underflow to zero. Taking the negative log converts the product into a sum:
 
 $$
-\min_\theta \sum_{X \in \mathcal{X}} \sum_{t=1}^{T} -\log p_\theta(x_t \mid \texttt{<bos>}, x_1, \ldots, x_{t-1}).
+\min_\theta \sum_{X \in \mathcal{X}} \sum_{t=1}^{T} -\log p_\theta(x_t \mid x_1, \ldots, x_{t-1}).
 $$
 
 This is the **next-token prediction loss**. Each term $-\log p_\theta(x_t \mid \cdots)$ penalizes the model for assigning low probability to the token that actually appeared. Minimizing this objective trains the model to be a good next-token predictor across all positions in all training sequences.
-
----
 
 ## 4. Building attention step by step
 
 We now turn to the central question: how do we go from the embedding matrix $E$ to $E_{\text{final}}$?
 
-Let's focus on computing row $T$ of $E_{\text{final}}$, the representation from which we predict the next token after the full sequence. From this row, the next-token distribution is
-
-$$
-p(v \mid X) = \operatorname{softmax}(W_{\text{head}} \, e_{\text{final},T})_v.
-$$
-
-We will build up the computation step by step, starting from the simplest possible approach and adding complexity only when we have a clear reason. Each step is motivated by a deficiency of the previous one.
-
-**Experimental setup.** To make the comparison concrete, we train each model variant on character-level Shakespeare data ([source](https://github.com/karpathy/nanoGPT/tree/master/data/shakespeare_char){:target="_blank"}) with the following settings:
-
-- Vocabulary: printable ASCII characters ($\vert V\vert = 65$).
-- Embedding dimension: $d = 768$.
-- Optimizer: Adam with large batch sizes.
-- We compare training loss curves and sample quality.
+**Experimental setup.** To make the comparison concrete, we train each model variant on character-level Shakespeare with $\vert V\vert = 65$, embedding dimension $d = 256$, sequence length $128$, batch size $64$, Adam optimizer with learning rate $3 \times 10^{-4}$, and $10{,}000$ training steps. We use $d = 256$ rather than the typical $d = 768$ to keep training feasible on a laptop; the architectural insights are the same.
 
 ### 4.1 Predict from the last embedding alone
 
-The simplest idea: define $e_{\text{final},T} = e_T$ and predict from there.
+The simplest idea: set $e_{\text{final},t} = e_t$ and predict the next token from the current token's embedding alone.
 
 $$
-e_{\text{final},T} = e_T.
+e_{\text{final},t} = e_t.
 $$
 
-This ignores the rest of the sequence entirely. The next-token prediction depends only on the identity of the current token, not on any context. It is a unigram-like model with learned embeddings: it can learn that "e" is a common character, but it cannot learn that "th" is often followed by "e".
+This ignores the rest of the sequence entirely. The next-token prediction depends only on the identity of the current token, not on any context. Given the character "t", the model outputs the same distribution over the next character regardless of whether "t" appears in "the" or "cat". It can learn that after "t", the character "h" is common (because "th" appears often in English), but it assigns the same distribution after every "t" it sees.
+
+After training, this model closely approximates the **character-frequency statistics** of the training data: the probability it assigns to each next character, given a current character, matches the frequency of that character pair in Shakespeare. Figure 4.1 verifies this claim by comparing the model's marginal character distribution to the training data's character frequencies.
+
+![Character frequency comparison](figures/char_frequency_comparison.png)
+
+*Figure 4.1: Character frequency distribution in the training data (blue) versus samples from the trained last-embedding model (red) for the 30 most frequent characters. The model closely matches the data distribution, confirming that it learns character-level statistics but nothing about longer-range structure.*
 
 ### 4.2 Average all embeddings
 
 Combine all positions by averaging:
 
 $$
-e_{\text{final},T} = \frac{1}{T}\sum_{i=1}^{T} e_i.
+e_{\text{final},t} = \frac{1}{t}\sum_{i=1}^{t} e_i.
 $$
 
-Now every token in the sequence contributes to the prediction. The model can, in principle, use global context. But every token contributes **equally**. The first character of a sentence has the same influence as the character immediately before the prediction point. In language, recent context usually matters more, and some tokens are far more relevant than others for predicting what comes next.
+(We average over positions $1, \ldots, t$ to respect causality: position $t$ should not see future tokens.) Now every token in the sequence contributes to the prediction. But every token contributes **equally**. The first character of a sentence has the same influence as the character immediately before the prediction point. In language, recent context usually matters more, and some tokens are far more relevant than others for predicting what comes next.
 
-### 4.3 Weighted combinations
+![Training curves: baselines](figures/training_curves_baselines.png)
 
-Let different tokens contribute different amounts:
+*Figure 4.2: Training loss for the two baseline models. Average pooling achieves **higher** loss than last-embedding-only. Equal weighting dilutes the signal: averaging 128 embeddings pushes the representation toward zero, losing the character-specific information that the last-embedding model exploits. Using context naively is worse than ignoring it.*
 
-$$
-e_{\text{final},T} = \sum_{i=1}^{T} a_i \, e_i, \qquad \sum_{i=1}^{T} a_i = 1.
-$$
+### 4.3 Weighted combinations and softmax normalization
 
-Now some tokens can dominate and others can be ignored. The question: where do the weights $a_i$ come from?
-
-A natural idea: tokens whose embeddings are more "aligned" with $e_T$ should get more weight. Define
+We want different tokens to contribute different amounts:
 
 $$
-a_i \propto e_i^T e_T.
+e_{\text{final},t} = \sum_{i=1}^{t} a_i \, e_i, \qquad \sum_{i=1}^{t} a_i = 1.
 $$
 
-The dot product $e_i^T e_T$ measures similarity between positions $i$ and $T$. Larger dot product means more influence on the prediction.
+Where do the weights $a_i$ come from? A natural idea: tokens whose embeddings are more "aligned" with $e_t$ should get more weight. Define $a_i \propto e_i^T e_t$. The dot product $e_i^T e_t$ measures similarity between positions $i$ and $t$. But the normalizing constant $\sum_i e_i^T e_t$ could be zero or negative, making the weights undefined or negative.
 
-One problem: the normalizing constant $\sum_i e_i^T e_T$ could be zero or negative, making the weights undefined or negative. We need a normalization scheme that keeps all weights positive.
-
-### 4.4 Softmax normalization
-
-Apply an exponential before normalizing. The exponential maps any real number to a positive number, so all weights become positive:
+Softmax (defined in §3.2) solves this. Apply the exponential function before normalizing:
 
 $$
-a_i = \frac{\exp(e_i^T e_T)}{\sum_{j=1}^{T} \exp(e_j^T e_T)} = \operatorname{softmax}(E \, e_T)_i.
+a_i = \frac{\exp(e_i^T e_t)}{\sum_{j=1}^{t} \exp(e_j^T e_t)} = \operatorname{softmax}(E_{1:t} \, e_t)_i.
 $$
 
-Larger dot products still produce larger weights, and the weights sum to $1$ by construction. This gives us
+Larger dot products produce larger weights, and the weights sum to $1$ by construction.
+
+**Scaling by $\sqrt{d}$.** If the embeddings are initialized as independent Gaussian vectors with entries from $\mathcal{N}(0,1)$, the dot product $e_i^T e_t$ has standard deviation $\sqrt{d}$. When $d = 256$, dot products can easily reach $\pm 16$. At that magnitude, the exponentials in the softmax create extreme ratios: entries with large positive dot products dominate while entries with large negative dot products effectively vanish. The model starts training in a regime where most of the weight concentrates on a few positions, regardless of the actual content.
+
+Dividing by $\sqrt{d}$ restores unit variance:
 
 $$
-e_{\text{final},T} = \sum_{i=1}^{T} \operatorname{softmax}(E \, e_T)_i \; e_i.
+a_i = \operatorname{softmax}\!\left(\frac{E_{1:t} \, e_t}{\sqrt{d}}\right)_i.
 $$
 
-### 4.5 Scaling by $\sqrt{d}$
+After this normalization, the softmax inputs are typically in the range $[-2, 2]$, producing a spread-out distribution that gradient descent can refine. The $\sqrt{d}$ scaling is the default initialization behavior in PyTorch and is used throughout the transformer literature.
 
-If the embeddings are initialized as independent Gaussian vectors with entries drawn from $\mathcal{N}(0,1)$, the dot product $e_i^T e_T$ has standard deviation $\sqrt{d}$. When $d = 768$, these dot products can easily reach $\pm 28$. At that magnitude, $\exp(e_i^T e_T)$ is either astronomically large (dominating all other weights) or effectively zero. The softmax output degenerates into a near-one-hot vector: one position gets all the weight, and the model learns nothing useful from the combination.
+### 4.4 Learned transformations: queries, keys, and values
 
-The fix: divide by $\sqrt{d}$.
+So far the attention weights are computed from the raw embeddings. There is no reason the same vectors that represent token identity should also be good for computing which tokens to attend to. We can decouple these roles by learning transformations.
 
-$$
-a_i = \operatorname{softmax}\!\left(\frac{E \, e_T}{\sqrt{d}}\right)_i.
-$$
-
-After dividing, the quantity $e_i^T e_T / \sqrt{d}$ has unit variance regardless of $d$, keeping the softmax arguments in a range where the output is a meaningful distribution rather than a spike.
-
-Why care about Gaussian initialization specifically? Gaussian initialization is a standard and effective way to initialize neural network parameters. The $\sqrt{d}$ scaling ensures the model starts in a regime where attention weights are diffuse, giving gradient descent a smooth landscape to optimize from the beginning.
-
-### 4.6 Learning the weights: queries, keys, and values
-
-So far the attention weights are computed from the raw embeddings. There is no reason the same vectors that represent token identity should also be optimal for computing which tokens to attend to. We can learn a transformation.
-
-**Step 1: a shared key transformation.** Learn a matrix $W \in \mathbb{R}^{d \times d}$ and compute weights in the transformed space:
+**Step 1: a shared transformation.** Learn a matrix $W \in \mathbb{R}^{d \times d}$ and compute weights in the transformed space:
 
 $$
-a_i = \operatorname{softmax}\!\left(\frac{(EW^T)(We_T)}{\sqrt{d}}\right)_i.
+a_i = \operatorname{softmax}\!\left(\frac{(W e_i)^T (W e_t)}{\sqrt{d}}\right).
 $$
 
-This decouples "what a token means" from "how attention weights are computed." But there is still a problem.
+This lets the model learn a different notion of "similarity" than raw dot products. But there is a structural problem. The weight $a_t$ that position $t$ assigns to itself is proportional to $\exp(\lVert W e_t\rVert^2 / \sqrt{d})$. Since $\lVert W e_t\rVert^2 \ge 0$, this is always at least $1$, and typically large — so most of the weight concentrates on the current token.
 
-**Step 2: separate queries and keys.** In the formula above, the tokens $\{e_i\}_{i=1}^T$ and the prediction point $e_T$ play different roles. The collection provides context (things to attend to); $e_T$ is what we are trying to continue. If we use the same transformation $W$ for both, then the attention weight $a_T$ that $e_T$ assigns to **itself** is proportional to $\exp(\lVert W e_T\rVert^2 / \sqrt{d})$. This is always positive and often large, biasing the model toward attending mostly to the current token.
-
-In language, the current token is not always the most informative for prediction. Consider "The cat sat on the \_\_\_". The most useful tokens for predicting the blank are "sat on", not the determiner "the" immediately before the blank. The model should be free to assign the current token low attention when appropriate.
-
-This motivates separate transformations. A **query** matrix $W_Q \in \mathbb{R}^{d \times d}$ transforms the token doing the attending, and a **key** matrix $W_K \in \mathbb{R}^{d \times d}$ transforms the tokens being attended to:
+**Step 2: separate queries and keys.** The tokens being attended to ($e_1, \ldots, e_t$) and the position doing the attending ($e_t$) play different roles. A **query** matrix $W_Q \in \mathbb{R}^{d \times d}$ transforms the attending position, and a **key** matrix $W_K \in \mathbb{R}^{d \times d}$ transforms the positions being attended to:
 
 $$
-a_i = \operatorname{softmax}\!\left(\frac{(E W_K^T)(W_Q e_T)}{\sqrt{d}}\right)_i.
+a_i = \operatorname{softmax}\!\left(\frac{(W_K e_i)^T (W_Q e_t)}{\sqrt{d}}\right).
 $$
 
-Now $a_T$ depends on $(W_K e_T)^T (W_Q e_T)$, which has no structural reason to be large. The query and key transformations can learn to make the current position unremarkable when that is what the data requires.
+Now $a_t$ depends on $(W_K e_t)^T (W_Q e_t)$, which has no structural reason to be large. Consider "The cat sat on the \_\_\_". The most useful tokens for predicting the blank are "sat on", not the determiner "the" immediately before the blank. With separate $W_Q$ and $W_K$, the model can learn to assign the current position low weight when that is what the data requires.
 
-**Step 3: value transformation.** We have been summing the raw embeddings $e_i$ with learned weights. The embeddings serve double duty: they help determine the weights (through keys) and they are the things being aggregated. We can decouple these roles with a **value** matrix $W_V \in \mathbb{R}^{d \times d}$:
+**Step 3: value transformation.** We have been summing the raw embeddings $e_i$ with learned weights. The embeddings serve double duty: they help determine the weights (through keys) and they are the things being aggregated. A **value** matrix $W_V \in \mathbb{R}^{d \times d}$ decouples these roles:
 
 $$
-e_{\text{final},T} = \sum_{i=1}^{T} a_i \, (W_V e_i).
+e_{\text{final},t} = \sum_{i=1}^{t} a_i \, (W_V e_i).
 $$
 
 The value transformation lets the model learn what information to extract from each position, independently of how attention weights are computed.
 
-Putting it all together for position $T$:
+Putting it all together for position $t$:
 
 $$
-e_{\text{final},T} = \sum_{i=1}^{T} \operatorname{softmax}\!\left(\frac{(E W_K^T)(W_Q e_T)}{\sqrt{d}}\right)_i \; (W_V e_i).
+e_{\text{final},t} = \sum_{i=1}^{t} \operatorname{softmax}\!\left(\frac{(W_K E_{1:t})^T (W_Q e_t)}{\sqrt{d}}\right)_i (W_V e_i).
 $$
 
-### 4.7 Attention: the matrix formulation
+**Training comparison.** Figure 4.3 compares all six model variants developed in this section. Each adds one component: (1) last embedding only, (2) average pooling, (3) softmax attention on raw embeddings, (4) shared $W$ transformation, (5) separate $W_Q$/$W_K$, (6) full $W_Q$/$W_K$/$W_V$.
 
-We can compute the above for **all** positions simultaneously. Define
+![Training curves: attention variants](figures/training_curves_attention.png)
+
+*Figure 4.3: Training loss vs. optimization step for six model variants on character-level Shakespeare ($d = 256$, $10{,}000$ steps). Average pooling performs worst due to signal dilution. The attention variants cluster near the last-embedding baseline (~2.4 nats/char), providing only marginal improvement. Single-layer attention without a feed-forward network or residual connection is not substantially more powerful than a learned bigram model for this task. The big improvements come from stacking full transformer blocks (Section 5).*
+
+### 4.5 The matrix formulation
+
+We can compute the attention output for **all** positions simultaneously. Define
 
 $$
 Q = E W_Q^T, \qquad K = E W_K^T, \qquad V = E W_V^T,
 $$
 
-where $Q$, $K$, $V$ are all $T \times d$. Row $t$ of $Q$ is the query for position $t$; row $i$ of $K$ is the key for position $i$; row $i$ of $V$ is the value for position $i$.
+where $Q, K, V \in \mathbb{R}^{T \times d}$. Row $t$ of $Q$ is the query for position $t$; row $i$ of $K$ is the key for position $i$; row $i$ of $V$ is the value for position $i$.
 
 The attention output for the entire sequence is
 
@@ -305,19 +300,19 @@ $$
 \operatorname{Attn}(E) = \operatorname{softmax}\!\left(\frac{QK^T + M}{\sqrt{d}}\right) V,
 $$
 
-where softmax is applied to each row independently, and $M \in \mathbb{R}^{T \times T}$ is a **causal mask**:
+where softmax is applied row-wise, and $M \in \mathbb{R}^{T \times T}$ is a **causal mask**:
 
 $$
 M_{t,i} = \begin{cases} 0 & \text{if } i \le t, \\ -\infty & \text{if } i > t. \end{cases}
 $$
 
-The $-\infty$ entries cause $\exp(-\infty) = 0$ in the softmax, so position $t$ cannot attend to any future position $i > t$. This is essential: without the mask, the model at position $t$ could "cheat" by looking at the actual next token when predicting it. We compute all positions in parallel for efficiency, and the mask ensures that row $t$ of $E_{\text{final}}$ depends only on tokens $1, \ldots, t$.
+The $-\infty$ entries cause $\exp(-\infty) = 0$ in the softmax, so position $t$ cannot attend to any future position $i > t$. Without the mask, position $t$ could look at the actual next token when predicting it, and autoregressive generation (where we produce tokens one at a time, left to right) would not make sense. The causal mask also provides some positional information: position $t$ attends to a different set of positions than position $t'$, though within the attended set $\lbrace 1, \ldots, t\rbrace$ the model cannot distinguish position order without additional encoding (see §6.2).
 
 ![Causal attention mask and attention weights](figures/attention_mask_heatmap.png)
 
-*Figure 4.1: Left: the causal mask $M$ for a sequence of length $T=12$. White entries are $0$ (attend); dark entries are $-\infty$ (block). Right: example attention weights after softmax, showing that each row sums to $1$ and only attends to earlier (or equal) positions.*
+*Figure 4.4: Left: the causal mask for a 12-token sequence. White entries are $0$ (attend); dark entries are $-\infty$ (block). Right: attention weights after softmax. Each row sums to $1$ and only attends to earlier (or equal) positions.*
 
-The matrix $\operatorname{Attn}(E)$ is $T \times d$. Row $t$ is a weighted combination of the value vectors $\{v_1, \ldots, v_t\}$, where the weights are determined by how well query $t$ matches keys $1, \ldots, t$. This mechanism was introduced in ["Attention Is All You Need" (Vaswani et al., 2017)](https://papers.nips.cc/paper_files/paper/2017/hash/3f5ee243547dee91fbd053c1c4a845aa-Abstract.html){:target="_blank"}, the paper that established the transformer architecture.
+This mechanism was introduced in ["Attention Is All You Need" (Vaswani et al., 2017)](https://papers.nips.cc/paper_files/paper/2017/hash/3f5ee243547dee91fbd053c1c4a845aa-Abstract.html){:target="_blank"}.
 
 ```python
 import torch
@@ -344,46 +339,38 @@ scores = scores + mask
 attn_weights = F.softmax(scores, dim=-1)   # (T, T)
 attn_output = attn_weights @ V             # (T, d)
 
-print("Q.shape:", Q.shape)                 # (10, 768)
-print("scores.shape:", scores.shape)       # (10, 10)
-print("attn_weights.shape:", attn_weights.shape)  # (10, 10)
-print("attn_output.shape:", attn_output.shape)    # (10, 768)
-print("attn_weights[0]:", attn_weights[0].tolist()[:3])  # first row: all weight on position 0
+print("Q.shape:", Q.shape)                 # torch.Size([10, 768])
+print("scores.shape:", scores.shape)       # torch.Size([10, 10])
+print("attn_weights.shape:", attn_weights.shape)  # torch.Size([10, 10])
+print("attn_output.shape:", attn_output.shape)    # torch.Size([10, 768])
+print("attn_weights[0]:", attn_weights[0].tolist()[:3])
 ```
-
-**Training comparison.** Figure 4.2 compares training loss curves for the model variants developed in this section, all trained on character-level Shakespeare:
-
-![Training curves: attention variants](figures/training_curves_attention_variants.png)
-
-*Figure 4.2: Training loss (negative log-likelihood per character) vs. optimization step for four model variants: (a) last embedding only, (b) average pooling, (c) scaled softmax attention without learned Q/K/V, (d) full Q/K/V attention. Each successive variant achieves lower training loss. The gap between (b) and (c) shows the value of data-dependent weighting; the gap between (c) and (d) shows the value of learned transformations.*
-
----
 
 ## 5. The transformer block
 
-Attention gives us a way to compute a context-aware representation $\operatorname{Attn}(E)$. We could stop here and feed this directly into the prediction head. But recall the philosophy from last lecture: deep learning transforms raw data into a form that is more useful for the final layer. Attention is one transformation. We can compose it with others to make the representation richer.
+Attention gives us a way to compute a context-aware representation $\operatorname{Attn}(E)$. We could stop here and feed this directly into the prediction head. But recall the idea from last lecture: deep learning transforms raw data into a form that is more useful for the final layer. Attention is one transformation. We can compose it with others to make the representation richer.
 
 ### 5.1 Residual connections
 
-A first improvement: instead of replacing $E$ with $\operatorname{Attn}(E)$, add them.
+Instead of replacing $E$ with $\operatorname{Attn}(E)$, add them:
 
 $$
 E' = \operatorname{Attn}(E) + E.
 $$
 
-This is a **residual connection**. The model can learn to use the attention output as a correction to the original embeddings rather than a wholesale replacement.
+This is a **residual connection**. The model can learn to use the attention output as a correction to the original embeddings rather than replacing them entirely.
 
-Why does this help? You will find many explanations online ("keeps the gradient flowing," etc.) that are vague at best. A more precise story: residual connections improve the **conditioning** of the optimization problem. When the transformation is the identity plus a small perturbation, the loss landscape near initialization is smoother, and gradient descent makes more reliable progress. We have not covered conditioning formally in this course, so take this as a working hypothesis rather than a theorem.
+Why does this help? Residual connections improve the **conditioning** of the optimization problem. When the transformation is the identity plus a small perturbation, the loss landscape near initialization is better behaved and gradient descent makes more reliable progress. We have not covered conditioning formally in this course, so take this as a working hypothesis rather than a theorem.
 
 ### 5.2 The feed-forward network
 
-Attention computes a weighted combination of linearly transformed embeddings. It is powerful for mixing information across positions, but within each position the transformation is linear (a matrix multiply). To add **nonlinearity** within each position, we apply a small feed-forward network (MLP) after attention:
+Attention computes a weighted combination of value vectors. The weights $a_i$ are nonlinear functions of the input (they pass through softmax), and the values $W_V e_i$ are linear transforms of the embeddings. But there is no element-wise nonlinearity applied to each position's representation after the weighted sum. A feed-forward network (MLP) adds this:
 
 $$
 \operatorname{MLP}(E') = \operatorname{ReLU}(E' W_1^T)\, W_2^T,
 $$
 
-where $W_1 \in \mathbb{R}^{4d \times d}$ and $W_2 \in \mathbb{R}^{d \times 4d}$. The data flows $d \to 4d \to d$: expand to a wider representation, apply a nonlinearity, then project back. The factor of $4$ is a convention from the original transformer paper; it provides enough capacity in the hidden layer without excessive cost.
+where $W_1 \in \mathbb{R}^{4d \times d}$ and $W_2 \in \mathbb{R}^{d \times 4d}$. The computation maps $d \to 4d \to d$: expand to a wider representation, apply ReLU, then project back. The factor of $4$ is a convention from the original transformer paper.
 
 We again add a residual connection:
 
@@ -393,7 +380,7 @@ $$
 
 ### 5.3 A single transformer block
 
-Composing the two pieces, a single **transformer block** is
+Composing these two pieces, a single **transformer block** is
 
 $$
 \text{Block}(E) = (\operatorname{MLP} + I) \circ (\operatorname{Attn} + I)(E),
@@ -403,22 +390,21 @@ where $I$ denotes the identity (the residual connections). First we mix informat
 
 ![Transformer block diagram](figures/transformer_block.png)
 
-*Figure 5.1: A single transformer block. The input $E$ passes through attention (with a residual connection), then through a feed-forward MLP (with another residual connection), producing $E''$ of the same shape.*
+*Figure 5.1: A single transformer block. The input $E$ passes through causal self-attention (with a residual connection), then through a feed-forward MLP (with another residual connection), producing $E''$ of the same shape.*
 
 ### 5.4 Stacking blocks: the full transformer
 
-A single transformer block has limited expressive power. To build a richer model, we stack $L$ blocks in sequence. Start with the embedding $E_0 = E$. Then for $\ell = 1, \ldots, L$:
+A single transformer block has limited expressive power. To build a richer model, we stack $L$ blocks. Starting with the embedding $E_0 = E$, for $\ell = 1, \ldots, L$:
 
 $$
 E_\ell = (\operatorname{MLP}_\ell + I) \circ (\operatorname{Attn}_\ell + I)(E_{\ell-1}).
 $$
 
-Define $E_{\text{final}} = E_L$. Each block has its own learnable parameters:
+Define $E_{\text{final}} = E_L$. Each block has its own learnable parameters: three weight matrices $W_{Q,\ell}, W_{K,\ell}, W_{V,\ell} \in \mathbb{R}^{d \times d}$ for attention, and two weight matrices $W_{1,\ell} \in \mathbb{R}^{4d \times d}$, $W_{2,\ell} \in \mathbb{R}^{d \times 4d}$ for the MLP. That is five parameter matrices per layer, plus the embedding table and the prediction head $W_{\text{head}}$.
 
-- $\operatorname{Attn}_\ell$: three weight matrices $W_{Q,\ell}$, $W_{K,\ell}$, $W_{V,\ell}$, each $d \times d$.
-- $\operatorname{MLP}_\ell$: two weight matrices $W_{1,\ell}$ ($4d \times d$) and $W_{2,\ell}$ ($d \times 4d$).
+![Training curves: transformer depth](figures/training_curves_depth.png)
 
-That is five parameter matrices per layer, plus the embedding table and the prediction head $W_{\text{head}}$.
+*Figure 5.2: Training loss vs. optimization step for transformers with 1, 2, 4, and 8 layers on character-level Shakespeare ($d = 256$, $10{,}000$ steps). Deeper models achieve lower training loss. The gap between 1 and 2 layers is substantial; returns diminish as depth increases further. Compare to Figure 4.3: adding the full transformer block (attention + residual + MLP) produces far larger gains than any of the attention-only variants.*
 
 ### 5.5 PyTorch implementation
 
@@ -483,244 +469,169 @@ model = SimpleTransformer(vocab_size, d, num_layers)
 x = torch.randint(0, vocab_size, (1, 32))
 logits = model(x)
 
-print("input shape:", x.shape)            # (1, 32)
-print("output shape:", logits.shape)       # (1, 32, 65)
+print("input shape:", x.shape)            # torch.Size([1, 32])
+print("output shape:", logits.shape)       # torch.Size([1, 32, 65])
 print("num parameters:", sum(p.numel() for p in model.parameters()))
 
 for name, p in model.named_parameters():
     print(f"  {name}: {tuple(p.shape)}")
 ```
 
-**Training comparison.** Figure 5.2 compares training loss for transformers with different depths, all using the architecture above.
-
-![Training curves: transformer depth](figures/training_curves_depth.png)
-
-*Figure 5.2: Training loss vs. optimization step for transformers with 1, 2, 4, and 8 layers on character-level Shakespeare. Deeper models achieve lower training loss. The gap between 1 and 2 layers is substantial; returns diminish as depth increases further.*
+### 5.6 Generating text
 
 Figure 5.3 shows text sampled from several model variants after training.
 
 ![Sample text from different models](figures/sample_text_comparison.png)
 
-*Figure 5.3: Text sampled from four models after training on Shakespeare. (a) Last-embedding-only: output is essentially random characters. (b) Average pooling: some character-level patterns emerge. (c) Single-layer Q/K/V attention: word-like structure appears. (d) 4-layer transformer: recognizable Shakespeare-like text with proper formatting.*
-
----
+*Figure 5.3: Text sampled from trained models. (a) Last-embedding-only: output reflects character frequencies but has no sequential structure. (b) Average pooling: some character-level patterns emerge. (c) Single-layer Q/K/V attention: word-like structure appears. (d) 4-layer transformer: recognizable formatting with line breaks and character names. (e) 4-layer transformer with positional encoding: improved coherence.*
 
 ## 6. Practical additions
 
-The architecture in Section 5 captures the essential structure of a transformer. Three additional components are standard in practice.
+The architecture in Section 5 captures the core structure of a transformer. Three additional components are standard in practice.
 
 ### 6.1 Output projection
 
-After computing the attention output $\operatorname{Attn}(E)$, multiply by a learned matrix $W_O \in \mathbb{R}^{d \times d}$ on the right:
+After computing the attention output $\operatorname{Attn}(E)$, apply a learned matrix $W_O \in \mathbb{R}^{d \times d}$:
 
 $$
 \operatorname{Attn}_{\text{proj}}(E) = \operatorname{Attn}(E)\, W_O^T.
 $$
 
-This gives the model an additional degree of freedom to transform the attention output before adding the residual. In practice, $W_O$ is almost always included.
+This gives the model an additional degree of freedom to transform the attention output before adding the residual.
 
 ### 6.2 Positional encodings
 
-The attention mechanism as described treats the input as a **set**: permuting the token order (while also permuting the causal mask accordingly) changes nothing about the computation within the attended positions. The causal mask does impose an ordering -- position $t$ cannot attend to positions after $t$ -- but within the attended positions $\{1, \ldots, t\}$, the model has no way to know which token came first and which came fifth.
+The causal mask restricts which positions each token can attend to, but within the attended set $\lbrace 1, \ldots, t\rbrace$, the attention computation treats tokens as a set: permuting positions $1$ through $t$ (while keeping the same embeddings) does not change the weighted sum. The model has no way to know which token came first and which came fifth.
 
-To give the model explicit information about token position, we add a **positional encoding** $P \in \mathbb{R}^{T \times d}$ to the embeddings:
+To give the model explicit position information, we add a **positional encoding** $P \in \mathbb{R}^{T \times d}$ to the embeddings:
 
 $$
 E_0 = E + P.
 $$
 
-The original transformer used a deterministic sinusoidal encoding (different frequencies along different dimensions of $d$). Many modern architectures learn $P$ as a parameter or use relative position encodings. The details vary, but the principle is the same: inject position information so the model can distinguish "the same token at position 3" from "the same token at position 300."
+The original transformer used a deterministic **sinusoidal encoding**:
+
+$$
+P_{t, 2k} = \sin\!\left(\frac{t}{10000^{2k/d}}\right), \qquad P_{t, 2k+1} = \cos\!\left(\frac{t}{10000^{2k/d}}\right).
+$$
+
+Different frequencies along different dimensions of $d$ encode position at multiple scales. In code, adding positional encoding is a one-line change to the forward pass: `E = self.embedding(x) + self.pe[:T]`, where `self.pe` is a precomputed buffer.
+
+Many modern architectures use learned positional encodings or relative position schemes. A widely used variant is **Rotary Position Embedding (RoPE)** ([Su et al., 2021](https://arxiv.org/abs/2104.09864){:target="_blank"}), which encodes relative positions through rotations in the query-key dot product.
+
+**Training comparison.** Figure 6.1 compares a 4-layer transformer with and without sinusoidal positional encoding.
+
+![Training curves: positional encoding](figures/training_curves_posenc.png)
+
+*Figure 6.1: Training loss for a 4-layer transformer with and without sinusoidal positional encoding ($d = 256$, $10{,}000$ steps). Positional encoding provides a consistent advantage, particularly later in training when the model has learned enough structure to exploit position information.*
 
 ### 6.3 Multiple attention heads
 
 A single attention layer computes one set of weights $a_{t,i}$ and one weighted combination. Different aspects of language may require attending to different things simultaneously: syntax might depend on nearby tokens while semantic reference might depend on distant ones.
 
-**Multi-head attention** splits the embedding dimension $d$ into $h$ heads, each of dimension $d_h = d/h$. Each head has its own $W_Q^{(j)}$, $W_K^{(j)}$, $W_V^{(j)}$ matrices (now $d \times d_h$ instead of $d \times d$), computes its own attention independently, and the $h$ outputs are concatenated back to dimension $d$:
+**Multi-head attention** splits the embedding dimension $d$ into $h$ heads, each of dimension $d_h = d/h$. Each head has its own $W_Q^{(j)}, W_K^{(j)}, W_V^{(j)}$ matrices (now $d \times d_h$ instead of $d \times d$), computes attention independently, and the $h$ outputs are concatenated:
 
 $$
 \operatorname{MultiHead}(E) = \operatorname{Concat}(\text{head}_1, \ldots, \text{head}_h)\, W_O^T,
 $$
 
-where each $\text{head}_j = \operatorname{Attn}_j(E) \in \mathbb{R}^{T \times d_h}$. The concatenation produces a $T \times d$ matrix, and the output projection $W_O \in \mathbb{R}^{d \times d}$ mixes the heads.
+where each $\text{head}_j = \operatorname{Attn}_j(E) \in \mathbb{R}^{T \times d_h}$. The concatenation produces a $T \times d$ matrix, and the output projection $W_O \in \mathbb{R}^{d \times d}$ mixes the heads. The total parameter count is similar to single-head attention, but different heads can specialize in different patterns.
 
-Multi-head attention costs roughly the same as single-head attention (the total number of parameters is similar), but it lets different heads specialize in different patterns.
+## 7. Byte pair encoding
 
----
+So far we have used a character-level vocabulary with $\vert V\vert = 65$ tokens. Character-level tokenization is simple but produces long sequences: a 1000-word passage might be 5000+ characters. Longer sequences mean more computation per training step (the attention matrix is $T \times T$) and more difficulty learning long-range dependencies.
 
-## 7. Conclusion
+**Byte pair encoding (BPE)** starts with individual characters and iteratively merges the most frequent adjacent pair into a new token. After enough merges, common words like "the" become single tokens, while rare words are split into subword pieces. The GPT-2 tokenizer uses BPE with a vocabulary of $50{,}257$ tokens.
 
-We built a transformer from first principles: starting with raw embeddings and progressively adding weighted combinations, softmax normalization, scaling, learned query/key/value transformations, residual connections, and feed-forward layers. The resulting architecture -- stacked transformer blocks trained with next-token prediction loss -- is the foundation of modern language models. Next lecture, we turn to training these models at scale.
+Here is how the same Shakespeare text looks under both tokenizers:
 
----
+```python
+import tiktoken
 
-## Appendix: prompts, scripts, and unit tests for figures
+enc = tiktoken.get_encoding("gpt2")
+text = "First Citizen:\nBefore we proceed any further, hear me speak.\n"
 
-### Figure 4.1: Causal attention mask and attention weights heatmap
+char_tokens = list(text)
+bpe_tokens = [enc.decode([t]) for t in enc.encode(text)]
 
-**File:** `script/plot_attention_mask_heatmap.py`
-**Output:** `figures/attention_mask_heatmap.png`
-
-**Description:** A two-panel figure. Left panel: a $12 \times 12$ heatmap of the causal mask $M$. Entries where $i \le t$ are white (or light), entries where $i > t$ are dark (representing $-\infty$). The $x$-axis is labeled "Key position $i$" and the $y$-axis is labeled "Query position $t$". Right panel: a $12 \times 12$ heatmap of example attention weights after softmax. Use a short random sequence of length 12, embed with random Gaussian embeddings ($d = 64$ is fine for visualization), compute $Q$, $K$, $V$ with random weight matrices scaled by $d^{-1/2}$, apply the causal mask, and show the resulting softmax weights. Use a sequential colormap (e.g., `viridis` or `Blues`). Each row should visibly sum to 1 and have zero weight above the diagonal.
-
-**Prompt for generation:**
-```
-Create a Python script that:
-1. Sets torch.manual_seed(42) and generates a random embedding E of shape (12, 64).
-2. Creates random W_Q, W_K, W_V of shape (64, 64), scaled by 64**-0.5.
-3. Computes Q, K, V, scores, causal mask, and attention weights.
-4. Produces a two-panel figure (1 row, 2 columns, figsize=(12, 5)):
-   - Left: heatmap of the causal mask (0 and -inf values, displayed as 0/1 binary).
-   - Right: heatmap of the attention weights (use plt.imshow with 'Blues' colormap).
-   - Both panels: axis labels "Key position" (x) and "Query position" (y), integer ticks.
-   - Add colorbars to both panels.
-   - Title left panel "Causal Mask" and right panel "Attention Weights".
-5. Saves to figures/attention_mask_heatmap.png at 150 dpi with tight_layout.
+print(f"Characters: {len(char_tokens)} tokens")
+# Characters: 62 tokens
+print(f"BPE:        {len(bpe_tokens)} tokens")
+# BPE:        16 tokens
+print(f"Compression: {len(char_tokens)/len(bpe_tokens):.1f}x")
+# Compression: 3.9x
+print(f"BPE tokens:  {bpe_tokens}")
+# BPE tokens:  ['First', ' Citizen', ':\n', 'Before', ' we', ' proceed', ' any', ' further', ',', ' hear', ' me', ' speak', '.', '\n']
 ```
 
-**Unit test:**
-```
-- The left panel should show a lower-triangular pattern: white/light on and below the diagonal, dark above.
-- The right panel should show nonzero values only on and below the diagonal.
-- Each row of the right panel should sum to approximately 1.0.
-- The figure should have exactly two subplots side by side.
-```
+The tradeoffs:
 
----
+| | Character-level | BPE |
+|---|---|---|
+| Vocab size | $65$ | $50{,}257$ |
+| Sequence length (1000 words) | $\sim 5000$ | $\sim 1300$ |
+| Embedding table params ($d = 256$) | $16{,}640$ | $12{,}865{,}792$ |
+| Attention cost per step | $T^2 = 25\text{M}$ | $T^2 = 1.7\text{M}$ |
 
-### Figure 4.2: Training curves comparing attention variants
+BPE sequences are roughly $4\times$ shorter, which quadratically reduces attention cost. But the embedding table is $800\times$ larger. For large models where $d$ is much bigger than $\vert V\vert$, this overhead is negligible. For our small $d = 256$ models, the BPE embedding table dominates the parameter count.
 
-**File:** `script/train_attention_variants.py`
-**Output:** `figures/training_curves_attention_variants.png`
+![BPE comparison](figures/bpe_comparison.png)
 
-**Description:** A single-panel line plot showing training loss (negative log-likelihood per character, $y$-axis) vs. optimization step ($x$-axis) for four model variants trained on character-level Shakespeare:
+*Figure 7.1: Training loss for 4-layer transformers (with positional encoding, $d = 256$, $3{,}000$ steps) trained on character-level vs. BPE tokenization. The losses are not directly comparable because the models predict different-sized tokens. The BPE model has $28.6\text{M}$ parameters (vs. $2.9\text{M}$ for char-level) due to its $50{,}257$-token embedding table.*
 
-1. **Last embedding only:** $e_{\text{final},T} = e_T$. A simple `nn.Embedding` + `nn.Linear` head.
-2. **Average pooling:** $e_{\text{final},T} = \frac{1}{T}\sum e_i$ (using cumulative mean to respect causality: position $t$ averages over positions $1,\ldots,t$).
-3. **Scaled softmax attention** (no learned Q/K/V): weights from raw embeddings with $\sqrt{d}$ scaling.
-4. **Full Q/K/V attention:** learned query, key, and value matrices.
+![BPE samples](figures/bpe_samples.png)
 
-All models use $d = 768$, vocab size 65, a single attention layer (no MLP, no residual for variants 1-3; variant 4 has Q/K/V but still no MLP or residual). Train for 2000 steps with Adam (lr=3e-4), batch size 64, sequence length 256. Plot all four curves on the same axes with a legend. Use distinct colors and line styles.
+*Figure 7.2: Generated text from the character-level and BPE models. The BPE model produces more coherent words because each token is a subword unit, but both models are trained for the same number of steps on a small-scale architecture.*
 
-**Prompt for generation:**
-```
-Create a Python script that:
-1. Downloads or loads Shakespeare character-level data from the nanoGPT repository.
-2. Implements four model variants as nn.Module subclasses:
-   (a) LastEmbeddingModel: embedding -> linear head (ignores all but last position per causal convention).
-   (b) AveragePoolModel: embedding -> causal cumulative average -> linear head.
-   (c) SoftmaxAttnModel: embedding -> scaled dot-product attention with raw embeddings (no learned Q/K/V) -> linear head.
-   (d) QKVAttnModel: embedding -> scaled dot-product attention with learned W_Q, W_K, W_V -> linear head.
-3. Trains each model for 2000 steps with Adam (lr=3e-4), batch size 64, sequence length 256.
-4. Logs training loss every 50 steps.
-5. Plots all four loss curves on a single figure (figsize=(10, 6)):
-   - x-axis: "Optimization step"
-   - y-axis: "Training loss (nats/char)"
-   - Legend with model names.
-   - Grid on.
-6. Saves to figures/training_curves_attention_variants.png at 150 dpi.
-```
+## 8. Conclusion
 
-**Unit test:**
-```
-- All four curves should be visible and distinguishable.
-- The last-embedding-only curve should have the highest final loss.
-- The QKV attention curve should have the lowest final loss.
-- Loss curves should be monotonically decreasing on average (local fluctuations are fine).
-- The y-axis should be labeled and the legend should not obscure any curves.
-```
+We built a transformer from first principles: starting with raw embeddings, we added weighted combinations, softmax normalization, $\sqrt{d}$ scaling, learned query/key/value transformations, residual connections, and feed-forward layers. The resulting architecture — stacked transformer blocks trained with next-token prediction loss — is the foundation of modern language models. Adding positional encodings gives the model explicit position information, and byte pair encoding compresses the input for more efficient training. Next lecture, we turn to training these models at scale.
 
----
+## Appendix: figure generation scripts
+
+All scripts are in the `script/` directory and read shared utilities from `script/common.py`. Run from the `script/` directory.
+
+### Figure 4.1: Character frequency comparison
+**File:** `script/plot_char_frequencies.py` → `figures/char_frequency_comparison.png`
+
+Loads the trained last-embedding checkpoint, generates 50,000 characters, and compares the character frequency distribution to the training data. The top 30 characters are shown as a grouped bar chart.
+
+### Figure 4.2: Baseline training curves
+**File:** `script/train_attention_variants.py` → `figures/training_curves_baselines.png`
+
+Training loss for last-embedding and average pooling models ($d=256$, 10,000 steps).
+
+### Figure 4.3: Attention variant training curves
+**File:** `script/train_attention_variants.py` → `figures/training_curves_attention.png`
+
+Training loss for all six attention variants: last embedding, average pooling, softmax attention (raw embeddings), shared W, separate Q/K, full Q/K/V.
+
+### Figure 4.4: Causal mask and attention weights
+**File:** `script/plot_attention_mask_heatmap.py` → `figures/attention_mask_heatmap.png`
+
+Two-panel figure: (left) binary causal mask for $T=12$, (right) attention weights after softmax.
 
 ### Figure 5.1: Transformer block diagram
+**File:** `script/plot_transformer_block.py` → `figures/transformer_block.png`
 
-**File:** `script/plot_transformer_block.py`
-**Output:** `figures/transformer_block.png`
+Vertical flow diagram of a single transformer block with attention, MLP, and residual connections.
 
-**Description:** A vertical flow diagram of a single transformer block. From bottom to top:
+### Figure 5.2: Depth comparison training curves
+**File:** `script/train_transformer_depth.py` → `figures/training_curves_depth.png`
 
-1. Input $E$ (labeled box).
-2. Arrow into "Causal Self-Attention" box.
-3. A "+" node merging the attention output with a skip connection from the input (residual).
-4. Arrow into "Feed-Forward MLP" box (label includes "$d \to 4d \to d$").
-5. A "+" node merging the MLP output with a skip connection from the post-attention output.
-6. Output $E''$ (labeled box).
-
-Use clean lines, rounded rectangles for operations, circles for addition nodes, and arrows for data flow. Skip connections shown as lines bypassing each operation block. Minimal color: white boxes with black borders, or light gray fill.
-
-**Prompt for generation:**
-```
-Create a Python script using matplotlib that draws a transformer block diagram as described.
-Use matplotlib.patches for boxes and matplotlib.patches.FancyArrowPatch for arrows.
-The diagram should be vertical (bottom to top), clean, and readable.
-Save to figures/transformer_block.png at 150 dpi with tight_layout, figsize=(5, 8).
-```
-
-**Unit test:**
-```
-- The diagram should show two main operation boxes (attention and MLP).
-- Two residual (skip) connections should be visible.
-- The flow direction should be bottom-to-top or top-to-bottom (consistent).
-- Text labels should be legible and not overlap.
-```
-
----
-
-### Figure 5.2: Training curves comparing transformer depth
-
-**File:** `script/train_transformer_depth.py`
-**Output:** `figures/training_curves_depth.png`
-
-**Description:** A single-panel line plot showing training loss vs. optimization step for four transformer models of different depths: 1, 2, 4, and 8 layers. All use the full architecture from Section 5 (attention + residual + MLP + residual per block), $d = 768$, trained on character-level Shakespeare with Adam (lr=3e-4), batch size 64, sequence length 256, for 2000 steps. Plot all four curves with distinct colors and a legend.
-
-**Prompt for generation:**
-```
-Create a Python script that:
-1. Loads Shakespeare character-level data.
-2. Uses the SimpleTransformer class from Section 5.5 (or equivalent).
-3. Trains four models with num_layers in {1, 2, 4, 8}.
-4. Logs training loss every 50 steps.
-5. Plots all four loss curves on one figure (figsize=(10, 6)):
-   - x-axis: "Optimization step"
-   - y-axis: "Training loss (nats/char)"
-   - Legend: "1 layer", "2 layers", "4 layers", "8 layers"
-   - Grid on.
-6. Saves to figures/training_curves_depth.png at 150 dpi.
-```
-
-**Unit test:**
-```
-- All four curves should be visible and distinguishable.
-- Deeper models should generally achieve lower final training loss.
-- The 1-layer curve should have the highest final loss.
-- Loss curves should decrease over training steps.
-```
-
----
+Training loss for transformers with 1, 2, 4, and 8 layers ($d=256$, 10,000 steps).
 
 ### Figure 5.3: Sample text comparison
+**File:** `script/generate_samples.py` → `figures/sample_text_comparison.png`
 
-**File:** `script/generate_sample_text.py`
-**Output:** `figures/sample_text_comparison.png`
+Generated text from five trained models: last-embedding, average pooling, Q/K/V attention, 4-layer transformer, 4-layer transformer with positional encoding.
 
-**Description:** A four-panel text figure. Each panel shows a 200-character sample generated by a different trained model: (a) last-embedding-only, (b) average pooling, (c) single-layer Q/K/V attention, (d) 4-layer transformer. Use a monospace font. Each panel is labeled with the model name. The panels should be arranged in a $2 \times 2$ grid. The figure should make it visually obvious that model quality improves from (a) to (d): (a) is near-random characters, (d) produces word-like or sentence-like structure.
+### Figure 6.1: Positional encoding comparison
+**File:** `script/train_transformer_depth.py` → `figures/training_curves_posenc.png`
 
-**Prompt for generation:**
-```
-Create a Python script that:
-1. Loads four pre-trained model checkpoints (or trains them inline).
-2. Generates 200 characters from each model using autoregressive sampling (temperature=0.8).
-3. Creates a 2x2 grid figure (figsize=(14, 10)) with each panel containing the sample text
-   rendered in a monospace font (e.g., 'Courier New' or 'monospace'), fontsize=9.
-4. Each panel has a title: "(a) Last Embedding Only", "(b) Average Pooling",
-   "(c) Single-Layer Attention", "(d) 4-Layer Transformer".
-5. Wraps text to fit within each panel (approximately 60 chars per line).
-6. Saves to figures/sample_text_comparison.png at 150 dpi.
-```
+Training loss for 4-layer transformer with and without sinusoidal positional encoding.
 
-**Unit test:**
-```
-- All four panels should contain visible text.
-- The text in panel (d) should contain recognizable English words or word fragments.
-- The text in panel (a) should look qualitatively more random than panel (d).
-- The figure should have exactly four subplots in a 2x2 grid.
-```
+### Figures 7.1–7.2: BPE comparison
+**File:** `script/train_bpe_comparison.py` → `figures/bpe_comparison.png`, `figures/bpe_samples.png`
+
+Training loss and generated samples comparing character-level and BPE tokenization on a 4-layer transformer.
