@@ -198,17 +198,17 @@ $$
 
 This ignores the rest of the sequence entirely. The next-token prediction depends only on the identity of the current token, not on any context. Given the character "t", the model outputs the same distribution over the next character regardless of whether "t" appears in "the" or "cat". It can learn that after "t", the character "h" is common (because "th" appears often in English), but it assigns the same distribution after every "t" it sees.
 
-After training, this model closely approximates the **character-pair statistics** of the training data: given a current character, the model's predicted distribution over the next character matches the frequency of that character pair in Shakespeare. Figure 4.1 verifies this claim by comparing the model's marginal character distribution to the training data's character frequencies.
+This is a **bigram model**: it learns $p(x_{t+1} \mid x_t)$, the distribution over the next character given only the current character. Figure 4.1 verifies this directly. For four conditioning characters — "t", "e", " ", and "n" — the model's learned conditional distribution (red) closely matches the data's bigram frequencies (blue).
 
-![Character frequency comparison](figures/char_frequency_comparison.png)
+![Bigram accuracy](figures/bigram_accuracy.png)
 
-*Figure 4.1: Character frequency distribution in the training data (blue) versus samples from the trained last-embedding model (red) for the 30 most frequent characters. The model closely matches the data distribution.*
+*Figure 4.1: Bigram distributions from the training data (blue) versus the trained last-embedding model (red) for four conditioning characters. Each panel shows $p(x_{t+1} \mid x_t)$ for the top 10 most likely next characters. The model closely matches the data's bigram statistics.*
 
-But the model cannot learn anything beyond these pairwise statistics. Consider the contexts "th" and "sh": both end with "h", so the model predicts the same distribution after both. In the data, "th" is followed by "e" nearly half the time (for "the", "them", "there", ...) while "sh" is followed by "a" and "e" more evenly ("shall", "she", ...). Figure 4.2 shows this gap: the true next-character distributions (blue, green) differ across contexts, but the model's prediction (red) is identical because it only sees the final character.
+But the model cannot learn anything beyond bigrams. Consider the contexts "th" and "sh": both end with "h", so the model predicts the same distribution after both. In the data, "th" is followed by "e" nearly half the time (for "the", "them", "there", ...) while "sh" is followed by "a" and "e" more evenly ("shall", "she", ...). Figure 4.2 shows this gap: the true trigram distributions (blue, green) differ across contexts, but the model's prediction (red) is identical because it only sees the final character.
 
-![Bigram comparison](figures/bigram_comparison.png)
+![Trigram limitation](figures/bigram_comparison.png)
 
-*Figure 4.2: The last-embedding model cannot distinguish contexts that end with the same character. Each panel shows two 2-character contexts with the same final character. The data's next-character distributions (blue, green) differ, but the model (red) predicts the same thing for both.*
+*Figure 4.2: The last-embedding model cannot learn trigram structure. Each panel shows two 2-character contexts with the same final character. The data's trigram distributions (blue, green) differ — $p(x_{t+1} \mid x_{t-1}, x_t)$ depends on $x_{t-1}$ — but the model (red) predicts the same distribution for both because it only conditions on $x_t$.*
 
 ### 4.2 Average all embeddings
 
@@ -497,7 +497,7 @@ for name, p in model.named_parameters():
 
 Here are 300-character samples from four of our trained models, generated autoregressively at temperature $0.8$.
 
-**(a) Last Embedding Only.** Output reflects character-pair frequencies but has no sequential structure:
+**(a) Last Embedding Only.** A bigram model: each character depends on the previous one, producing common pairs like "th" and "he", but no coherent words or longer structure:
 
 > Wh shinal dawome usio ith by thy ghe t trongat prerend thin e ime mmas y I r d: HAng, bo th'ewe Buraithe ale e ant stafr onour nor ghere thisuls acoupren'stofo hed winoothans Pr I grou ay che lombood, blles thatig. TEYouthe l telve that. There ild I'd e: RLerirondeisthe pr s t s, thellknge worir, f
 
@@ -739,15 +739,15 @@ We built a transformer from first principles: starting with raw embeddings, we a
 
 All scripts are in the `script/` directory and read shared utilities from `script/common.py`. Run from the `script/` directory.
 
-### Figure 4.1: Character frequency comparison
-**File:** `script/plot_char_frequencies.py` → `figures/char_frequency_comparison.png`
+### Figure 4.1: Bigram accuracy
+**File:** inline script → `figures/bigram_accuracy.png`
 
-Loads the trained last-embedding checkpoint, generates 50,000 characters, and compares the character frequency distribution to the training data. The top 30 characters are shown as a grouped bar chart.
+Compares the trained last-embedding model's conditional distribution $p(x_{t+1} \mid x_t)$ to the data's bigram frequencies for four conditioning characters ("t", "e", " ", "n"). Top 10 next characters shown per panel.
 
-### Figure 4.2: Bigram limitation
+### Figure 4.2: Trigram limitation
 **File:** `script/plot_bigram_comparison.py` → `figures/bigram_comparison.png`
 
-Shows that the last-embedding model cannot distinguish different 2-character contexts that end with the same character. Three panels compare data trigram distributions to the model's context-independent prediction.
+Shows that the last-embedding model learns bigram statistics but cannot learn trigram structure. Three panels compare data trigram distributions to the model's bigram prediction for contexts that share the same final character.
 
 ### Figure 4.3: Baseline training curves
 **File:** `script/train_attention_variants.py` → `figures/training_curves_baselines.png`
