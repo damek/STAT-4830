@@ -202,7 +202,7 @@ This is a **bigram model**: it learns $p(x_{t+1} \mid x_t)$, the distribution ov
 
 ![Bigram accuracy](figures/bigram_accuracy.png)
 
-*Figure 4.1: Bigram distributions from the training data (blue) versus the trained last-embedding model (red) for four conditioning characters. Each panel shows $p(x_{t+1} \mid x_t)$ for the top 10 most likely next characters. The model closely matches the data's bigram statistics.*
+*Figure 4.1: Bigram distributions from the training data (blue) versus the trained last-embedding model (red) for four conditioning characters. Each panel shows $p(x_{t+1} \mid x_t)$ for the top 10 most likely next characters. The model closely matches the data's bigram statistics. (In all figures, "SP" denotes the space character and "\n" denotes newline.)*
 
 But the model cannot learn anything beyond bigrams. Consider the contexts "th" and "sh": both end with "h", so the model predicts the same distribution after both. In the data, "th" is followed by "e" nearly half the time (for "the", "them", "there", ...) while "sh" is followed by "a" and "e" more evenly ("shall", "she", ...). Figure 4.2 shows this gap: the true trigram distributions (blue, green) differ across contexts, but the model's prediction (red) is identical because it only sees the final character.
 
