@@ -135,7 +135,7 @@ Our model maps a sequence $X$ to next-token probabilities. This happens in stage
 1. **Tokenize:** convert raw text into a sequence of token indices $X = (x_1, \ldots, x_T)$.
 2. **Embed:** look up embeddings to get $E \in \mathbb{R}^{T \times d}$.
 3. **Transform:** apply operations to produce $E_{\text{final}} \in \mathbb{R}^{T \times d}$.
-4. **Score:** compute $\text{scores} = E_{\text{final}} W_{\text{head}}^T \in \mathbb{R}^{T \times \vert V\vert}$.
+4. **Score:** multiply by a learnable matrix $W_{\text{head}} \in \mathbb{R}^{\vert V\vert \times d}$ to get $\text{scores} = E_{\text{final}} W_{\text{head}}^T \in \mathbb{R}^{T \times \vert V\vert}$.
 5. **Normalize:** apply softmax row-wise to get probabilities.
 
 **Softmax** converts a vector of real numbers into a probability distribution. For a vector $z \in \mathbb{R}^n$:
