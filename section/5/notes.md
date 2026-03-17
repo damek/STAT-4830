@@ -680,7 +680,7 @@ where each $\text{head}_j = \operatorname{Attn}_j(E) \in \mathbb{R}^{T \times d_
 
 So far we have used a character-level vocabulary with $\vert V\vert = 65$ tokens. Character-level tokenization is simple but produces long sequences: a 1000-word passage might be 5000+ characters. Longer sequences mean more computation per training step (the attention matrix is $T \times T$) and more difficulty learning long-range dependencies.
 
-**Byte pair encoding (BPE)** starts with individual characters and iteratively merges the most frequent adjacent pair into a new token. After enough merges, common words like "the" become single tokens, while rare words are split into subword pieces. The GPT-2 tokenizer uses BPE with a vocabulary of $50{,}257$ tokens.
+**Byte pair encoding (BPE)** starts with individual characters and iteratively merges the most frequent adjacent pair into a new token. After enough merges, common words like "the" become single tokens, while rare words are split into subword pieces. The GPT-2 tokenizer uses BPE with a vocabulary of $50{,}257$ tokens. For an interactive walkthrough of the merging process, see [this BPE demo](https://www.cs.cornell.edu/courses/cs4782/2026sp/demos/bytepair/){:target="_blank"}.
 
 Here is how the same Shakespeare text looks under both tokenizers:
 
