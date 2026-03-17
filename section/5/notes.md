@@ -408,7 +408,15 @@ $$
 E_\ell = (\operatorname{MLP}_\ell + I) \circ (\operatorname{Attn}_\ell + I)(E_{\ell-1}).
 $$
 
-Define $E_{\text{final}} = E_L$. Each block has its own learnable parameters: three weight matrices $W_{Q,\ell}, W_{K,\ell}, W_{V,\ell} \in \mathbb{R}^{d \times d}$ for attention, and two weight matrices $W_{1,\ell} \in \mathbb{R}^{4d \times d}$, $W_{2,\ell} \in \mathbb{R}^{d \times 4d}$ for the MLP. That is five parameter matrices per layer, plus the embedding table and the prediction head $W_{\text{head}}$.
+Define $E_{\text{final}} = E_L$. Each block has its own learnable parameters: three weight matrices $W_{Q,\ell}, W_{K,\ell}, W_{V,\ell} \in \mathbb{R}^{d \times d}$ for attention, and two weight matrices $W_{1,\ell} \in \mathbb{R}^{4d \times d}$, $W_{2,\ell} \in \mathbb{R}^{d \times 4d}$ for the MLP.
+
+**Parameter count.** Each attention layer has $3d^2$ parameters (from $W_Q, W_K, W_V$). Each MLP has $4d^2 + 4d^2 = 8d^2$ parameters (from $W_1$ and $W_2$). So each block contributes $11d^2$, and $L$ blocks contribute $11Ld^2$. Adding the embedding table ($\vert V\vert d$) and the prediction head $W_{\text{head}}$ ($\vert V\vert d$), the total is
+
+$$
+\text{params} = 2\vert V\vert d + 11Ld^2.
+$$
+
+For our experiments with $\vert V\vert = 65$, $d = 256$, $L = 4$: $2 \cdot 65 \cdot 256 + 11 \cdot 4 \cdot 256^2 = 33{,}280 + 2{,}883{,}584 = 2{,}916{,}864$ parameters. The per-block term dominates once $d \gg \vert V\vert$.
 
 ![Training curves: transformer depth](figures/training_curves_depth.png)
 
