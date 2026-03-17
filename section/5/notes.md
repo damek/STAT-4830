@@ -154,7 +154,7 @@ $$
 
 Here $W_{\text{head}} \in \mathbb{R}^{\vert V\vert \times d}$ is a learnable weight matrix. Each row of $W_{\text{head}}$ is a template vector for one vocabulary token; the dot product with $e_{\text{final},t}$ produces that token's score at position $t$.
 
-The central question of this lecture: **how do we compute $E_{\text{final}}$ from $E$?**
+The central question of this lecture — **how do we compute $E_{\text{final}}$ from $E$?** — is the subject of Sections 4 and 5. First, we need a training objective.
 
 ### 3.3 The training objective
 
