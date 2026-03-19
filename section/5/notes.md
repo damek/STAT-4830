@@ -416,7 +416,7 @@ $$
 \text{params} = 2\vert V\vert d + 11Ld^2.
 $$
 
-For our experiments with $\vert V\vert = 65$, $d = 256$, $L = 4$: $2 \cdot 65 \cdot 256 + 11 \cdot 4 \cdot 256^2 = 33{,}280 + 2{,}883{,}584 = 2{,}916{,}864$ parameters. The per-block term dominates once $d \gg \vert V\vert$.
+For our experiments with $\vert V\vert = 65$, $d = 256$, $L = 4$: $2 \cdot 65 \cdot 256 + 11 \cdot 4 \cdot 256^2 = 33{,}280 + 2{,}883{,}584 = 2{,}916{,}864$ parameters. The per-block term $11Ld^2$ dominates the embedding term $2\vert V\vert d$ once $Ld \gg \vert V\vert$. With character-level tokens ($\vert V\vert = 65$), this happens immediately. With BPE ($\vert V\vert \approx 100{,}000$) and $d \approx 10{,}000$, the crossover is around $L \approx 10$ layers.
 
 ![Training curves: transformer depth](figures/training_curves_depth.png)
 
@@ -424,7 +424,7 @@ For our experiments with $\vert V\vert = 65$, $d = 256$, $L = 4$: $2 \cdot 65 \c
 
 #### 5.4.1 Stacking attention-only blocks
 
-How much of the improvement in Figure 5.2 comes from the MLP? We can isolate the contribution by stacking **attention-only blocks** — each block computes $E \leftarrow E + \operatorname{Attn}(E)$, with no feed-forward network. The residual connection is still present, so we can stack multiple layers.
+How much of the improvement in Figure 5.2 comes from the MLP? We can isolate the contribution by stacking **attention-only blocks** — each block computes $E \leftarrow E + \operatorname{Attn}(E)$, with no feed-forward network.
 
 ![Training curves: attention-only depth](figures/training_curves_attn_only_depth.png)
 
@@ -740,7 +740,7 @@ The BPE model produces more coherent words because each token is already a subwo
 
 ## 8. Conclusion
 
-We built a transformer from first principles: starting with raw embeddings, we added weighted combinations, softmax normalization, $\sqrt{d}$ scaling, learned query/key/value transformations, residual connections, and feed-forward layers. The resulting architecture — stacked transformer blocks trained with next-token prediction loss — is the foundation of modern language models. Adding positional encodings gives the model explicit position information, and byte pair encoding compresses the input for more efficient training. Next lecture, we turn to training these models at scale.
+We built a transformer from first principles: starting with raw embeddings, we added weighted combinations, softmax normalization, $\sqrt{d}$ scaling, learned query/key/value transformations, residual connections, and feed-forward layers. The resulting architecture — stacked transformer blocks trained with next-token prediction loss — is the foundation of modern language models.
 
 <!-- 
 ## Appendix: figure generation scripts
