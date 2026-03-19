@@ -13,8 +13,8 @@ title: A step-by-step introduction to transformer models
 5. [The transformer block](#5-the-transformer-block)
 6. [Practical additions](#6-practical-additions)
 7. [Byte pair encoding](#7-byte-pair-encoding)
-8. [Conclusion](#8-conclusion)
-9. [Appendix: figure generation scripts](#appendix-figure-generation-scripts)
+8. [Perplexity](#8-perplexity)
+9. [Conclusion](#9-conclusion)
 
 ## 1. Sequence data and next-token prediction
 
@@ -738,7 +738,44 @@ Here are samples from both models (temperature $0.8$):
 
 The BPE model produces more coherent words because each token is already a subword unit, but both models are trained for the same number of steps on a small-scale architecture.
 
-## 8. Conclusion
+## 8. Perplexity
+
+Throughout this lecture we reported training loss in nats per token. The standard metric in language modeling is **perplexity**. To define it, start from the quantity we already have.
+
+Our training loss for a sequence $X = (x_1, \ldots, x_T)$ is
+
+$$
+\mathcal{L} = \frac{1}{T}\sum_{t=1}^{T} -\log p_\theta(x_t \mid x_1, \ldots, x_{t-1}).
+$$
+
+This is the average negative log-likelihood per token. When we train on multiple sequences, we average over all tokens across all of them.
+
+Recall from Section 3.3 that the likelihood of the data is the product $\prod_{t=1}^{T} p_\theta(x_t \mid x_1, \ldots, x_{t-1})$. The inverse of this product is
+
+$$
+\frac{1}{\prod_{t=1}^{T} p_\theta(x_t \mid x_1, \ldots, x_{t-1})} = \exp(T \cdot \mathcal{L}).
+$$
+
+This is how "surprised" the model is by the data: a large value means the model assigned low probability to what actually happened. But this quantity grows exponentially with $T$, so it is useless for comparing datasets of different lengths. To normalize, take the $T$-th root — the **geometric mean** of the per-token inverse probabilities:
+
+$$
+\text{perplexity} = \left(\frac{1}{\prod_{t=1}^{T} p_\theta(x_t \mid x_1, \ldots, x_{t-1})}\right)^{1/T} = \exp(\mathcal{L}).
+$$
+
+Equivalently, if $\bar{p}$ is the geometric mean probability the model assigns to each correct token, then perplexity $= 1/\bar{p}$.
+
+Why call it "effective number of choices"? If the model assigned uniform probability $1/k$ to $k$ tokens at every step, the geometric mean probability would be $1/k$ and perplexity would be exactly $k$. So a perplexity of $3.5$ means the model is, on average, as uncertain as if it were choosing uniformly among $3.5$ options. A perplexity of $1$ means $\bar{p} = 1$: the model predicts every token with certainty. A perplexity of $65$ (our vocab size) means the model has learned nothing.
+
+| Model | Loss (nats/token) | Perplexity |
+|---|---|---|
+| Uniform baseline | $4.17$ | $65.0$ |
+| Last embedding (bigram) | $2.45$ | $11.6$ |
+| 4-layer transformer | $1.25$ | $3.5$ |
+| 8-layer transformer | $0.92$ | $2.5$ |
+
+Perplexity is the standard metric in published language modeling results because it is comparable across different vocabulary sizes and sequence lengths in a way that raw loss is not.
+
+## 9. Conclusion
 
 We built a transformer from first principles: starting with raw embeddings, we added weighted combinations, softmax normalization, $\sqrt{d}$ scaling, learned query/key/value transformations, residual connections, and feed-forward layers. The resulting architecture — stacked transformer blocks trained with next-token prediction loss — is the foundation of modern language models.
 
