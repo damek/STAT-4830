@@ -10,7 +10,7 @@ title: A step-by-step introduction to diffusion models
 2. [The key insight: noise and denoising](#2-the-key-insight-noise-and-denoising)
 3. [The forward process: adding noise](#3-the-forward-process-adding-noise)
 4. [The reverse process: learning to denoise](#4-the-reverse-process-learning-to-denoise)
-5. [The neural network: U-Net](#5-the-neural-network-u-net)
+5. [The neural network](#5-the-neural-network)
 6. [Training](#6-training)
 7. [Sampling](#7-sampling)
 8. [The noise schedule](#8-the-noise-schedule)
@@ -529,8 +529,6 @@ The first term measures whether the generated features are centered in the same 
 ## 12. Conclusion
 
 We built a diffusion model from first principles. The forward process destroys an image by gradually adding Gaussian noise; the closed-form $x_t = \sqrt{\bar{\alpha}_t}\, x_0 + \sqrt{1 - \bar{\alpha}_t}\, \varepsilon$ lets us jump to any noise level. The reverse process uses a trained U-Net to predict the noise at each step, with MSE as the loss. Sampling starts from pure noise and iteratively denoises.
-
----
 
 ## Appendix A: product of Gaussian densities {#appendix-a-product-of-gaussian-densities}
 
