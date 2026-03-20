@@ -27,13 +27,13 @@ title: Table of Contents
 [5. A step-by-step introduction to transformer models](section/5/notes.md)
    > Building transformers from scratch: embeddings, attention, residual connections, and next-token prediction on Shakespeare.
 
+[6. A step-by-step introduction to diffusion models](section/6/notes.md)
+   > Diffusion models from first principles: forward process, reverse process, noise prediction, U-Net, sampling, DDIM, conditional generation, and FID.
+
    
 ---
 
 Some 2025 content below; yet to be deleted.
-
-[6. Stochastic gradient descent: A first look](section/6/notes.md)
-   > A first look at stochastic gradient descent through the mean estimation problem.
 
 [7. Stochastic gradient descent: insights from the Noisy Quadratic Model](section/7/notes.md)
    > When should we use exponential moving averages, momentum, and preconditioning?
