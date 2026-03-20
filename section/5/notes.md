@@ -250,29 +250,27 @@ $$
 a_i = \operatorname{softmax}\!\left(\frac{E_{1:t} \, e_t}{\sqrt{d}}\right)_i.
 $$
 
-After this normalization, the softmax inputs are typically in the range $[-2, 2]$, producing a spread-out distribution that gradient descent can refine. The $\sqrt{d}$ scaling is the default initialization behavior in PyTorch and is used throughout the transformer literature.
+After this normalization, the cross-terms $e_i^T e_t / \sqrt{d}$ for $i \neq t$ have standard deviation $1$ and are typically in $[-2, 2]$, producing a spread-out distribution that gradient descent can refine.
+
+**The self-attention problem.** There is a catch. Consider the *self-term* at position $t$: $e_t^T e_t / \sqrt{d} = \lVert e_t\rVert^2 / \sqrt{d}$. Since $\lVert e_t\rVert^2$ is a sum of $d$ squared standard normals, it concentrates around $d$. So $e_t^T e_t / \sqrt{d} \approx \sqrt{d}$. For $d = 256$, the self-term is $\approx 16$ while the cross-terms are $\mathcal{O}(1)$. The vector $E_{1:t}\, e_t / \sqrt{d}$ has one huge entry (the last one) and the rest are order $1$. The softmax puts almost all weight on position $t$, and we are back to the bigram model.
+
+
 
 ### 4.4 Learned transformations: queries, keys, and values
 
-So far the attention weights are computed from the raw embeddings. There is no reason the same vectors that represent token identity should also be good for computing which tokens to attend to. We can decouple these roles by learning transformations.
-
-**Step 1: a shared transformation.** Learn a matrix $W \in \mathbb{R}^{d \times d}$ and compute weights in the transformed space:
-
-$$
-a_i = \operatorname{softmax}\!\left(\frac{(W e_i)^T (W e_t)}{\sqrt{d}}\right).
-$$
-
-This lets the model learn a different notion of "similarity" than raw dot products. But there is a structural problem. The weight $a_t$ that position $t$ assigns to itself is proportional to $\exp(\lVert W e_t\rVert^2 / \sqrt{d})$. Since $\lVert W e_t\rVert^2 \ge 0$, this is always at least $1$, and typically large — so most of the weight concentrates on the current token.
-
-**Step 2: separate queries and keys.** The tokens being attended to ($e_1, \ldots, e_t$) and the position doing the attending ($e_t$) play different roles. A **query** matrix $W_Q \in \mathbb{R}^{d \times d}$ transforms the attending position, and a **key** matrix $W_K \in \mathbb{R}^{d \times d}$ transforms the positions being attended to:
+**Separate queries and keys.** The fix: transform each side with *independent* matrices. A **query** matrix $W_Q \in \mathbb{R}^{d \times d}$ transforms the attending position, and a **key** matrix $W_K \in \mathbb{R}^{d \times d}$ transforms the positions being attended to:
 
 $$
 a_i = \operatorname{softmax}\!\left(\frac{(W_K e_i)^T (W_Q e_t)}{\sqrt{d}}\right).
 $$
 
-Now $a_t$ depends on $(W_K e_t)^T (W_Q e_t)$, which has no structural reason to be large. Consider "The cat sat on the \_\_\_". The most useful tokens for predicting the blank are "sat on", not the determiner "the" immediately before the blank. With separate $W_Q$ and $W_K$, the model can learn to assign the current position low weight when that is what the data requires.
+Initialize $W_Q$ and $W_K$ independently with entries from $\mathcal{N}(0, 1/d)$. Then $W_Q e_t$ has entries with variance $\sum_{k=1}^d \operatorname{Var}(W_{Q,jk}) \cdot \operatorname{Var}(e_{t,k}) = d \cdot (1/d) \cdot 1 = 1$, and likewise for $W_K e_i$. The dot product $(W_K e_i)^T (W_Q e_t)$ is a sum of $d$ terms each with variance $1$, so it has standard deviation $\sqrt{d}$. After dividing by $\sqrt{d}$, each entry has standard deviation $1$.
 
-**Step 3: value transformation.** We have been summing the raw embeddings $e_i$ with learned weights. The embeddings serve double duty: they help determine the weights (through keys) and they are the things being aggregated. A **value** matrix $W_V \in \mathbb{R}^{d \times d}$ decouples these roles:
+The key point: because $W_Q$ and $W_K$ are independent matrices, $W_Q e_t$ and $W_K e_t$ are independent vectors *even when applied to the same input* $e_t$. The self-term $(W_K e_t)^T (W_Q e_t) / \sqrt{d}$ has the same distribution as the cross-terms $(W_K e_i)^T (W_Q e_t) / \sqrt{d}$ for $i \neq t$. All entries of $E_{1:t} W_K^T W_Q e_t / \sqrt{d}$ are typically in $[-2, 2]$. The self-attention concentration is gone.
+
+This matters for learning. Consider "The cat sat on the \_\_\_". The most useful tokens for predicting the blank are "sat on", not the determiner "the" immediately before the blank. With separate $W_Q$ and $W_K$, the model can learn to assign the current position low weight when that is what the data requires.
+
+**Value transformation.** We have been summing the raw embeddings $e_i$ with learned weights. The embeddings serve double duty: they help determine the weights (through keys) and they are the things being aggregated. A **value** matrix $W_V \in \mathbb{R}^{d \times d}$ decouples these roles:
 
 $$
 e_{\text{final},t} = \sum_{i=1}^{t} a_i \, (W_V e_i).
@@ -286,11 +284,11 @@ $$
 e_{\text{final},t} = \sum_{i=1}^{t} \operatorname{softmax}\!\left(\frac{(W_K E_{1:t})^T (W_Q e_t)}{\sqrt{d}}\right)_i (W_V e_i).
 $$
 
-**Training comparison.** Figure 4.4 compares all six model variants developed in this section. Each adds one component: (1) last embedding only, (2) average pooling, (3) softmax attention on raw embeddings, (4) shared $W$ transformation, (5) separate $W_Q$/$W_K$, (6) full $W_Q$/$W_K$/$W_V$.
+**Training comparison.** Figure 4.4 compares the model variants developed in this section.
 
 ![Training curves: attention variants](figures/training_curves_attention.png)
 
-*Figure 4.4: Training loss vs. optimization step for six model variants on character-level Shakespeare ($d = 256$, $10{,}000$ steps). Average pooling performs worst due to signal dilution. The attention variants cluster near the last-embedding baseline (~2.4 nats/char), providing only marginal improvement. Single-layer attention without a feed-forward network or residual connection is not substantially more powerful than a learned bigram model for this task. The big improvements come from stacking full transformer blocks (Section 5).*
+*Figure 4.4: Training loss vs. optimization step for attention variants on character-level Shakespeare ($d = 256$, $10{,}000$ steps). Average pooling performs worst due to signal dilution. The attention variants — including a shared-$W$ baseline (same matrix on both sides) — all cluster near the last-embedding model (~2.4 nats/char). Single-layer attention without a feed-forward network or residual connection is not substantially more powerful than a learned bigram model for this task. The big improvements come from stacking full transformer blocks (Section 5).*
 
 ### 4.5 The matrix formulation
 
@@ -802,7 +800,7 @@ Training loss for last-embedding and average pooling models ($d=256$, 10,000 ste
 ### Figure 4.4: Attention variant training curves
 **File:** `script/train_attention_variants.py` → `figures/training_curves_attention.png`
 
-Training loss for all six attention variants: last embedding, average pooling, softmax attention (raw embeddings), shared W, separate Q/K, full Q/K/V.
+Training loss for attention variants: last embedding, average pooling, softmax attention (raw embeddings), shared W, separate Q/K, full Q/K/V.
 
 ### Figure 4.5: Causal mask and attention weights
 **File:** `script/plot_attention_mask_heatmap.py` → `figures/attention_mask_heatmap.png`
