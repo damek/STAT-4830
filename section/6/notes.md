@@ -5,6 +5,8 @@ title: A step-by-step introduction to diffusion models
 
 # 6. A step-by-step introduction to diffusion models
 
+These notes are heavily inspired by Lilian Weng's excellent overview, [What are Diffusion Models?](https://lilianweng.github.io/posts/2021-07-11-diffusion-models/){:target="_blank"}.
+
 ## Table of contents
 1. [Image generation: the problem](#1-image-generation-the-problem)
 2. [The key insight: noise and denoising](#2-the-key-insight-noise-and-denoising)
