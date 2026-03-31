@@ -858,13 +858,15 @@ $$
 
 GRPO normalizes the rewards within the batch: subtracts the mean and divides by the standard deviation. People claimed this was the secret sauce that made DeepSeek work. Last year, everyone kept repeating "GRPO GRPO GRPO." It was pretty annoying.
 
-For **rejection sampling** (sometimes called ReST, Reinforcement from Self-Training): when rewards are binary ($r(Y) \in \{0, 1\}$), set $Z_i = r(Y_i)$. This means $Z_i = 1$ for correct answers and $Z_i = 0$ for incorrect ones. The gradient update becomes
+For **rejection sampling**: when rewards are binary ($r(Y) \in \{0, 1\}$), keep sampling from $p_\theta(\cdot \mid X)$ until you get a correct answer $Y$, then take a gradient step on $\nabla_\theta \log p_\theta(Y \mid X)$. This gives the $\log$ rescaling (Section 8.2) because the expected number of samples per update is $1/P(\text{correct})$, so the effective cost per step depends on the current success probability.
+
+In practice, nobody actually resamples until success. Instead, you sample a batch of $b$ answers, throw away the wrong ones, and average the gradient over the $k$ correct ones:
 
 $$
-\theta_{+} = \theta + \eta \cdot \frac{1}{b}\sum_{i:\, Y_i \text{ correct}} \nabla_\theta \log p_\theta(Y_i \mid X).
+\theta_{+} = \theta + \eta \cdot \frac{1}{k}\sum_{i:\, Y_i \text{ correct}} \nabla_\theta \log p_\theta(Y_i \mid X), \qquad k = \sum_{i=1}^b \mathbf{1}[Y_i \text{ correct}].
 $$
 
-This is just supervised learning on the correct samples from the batch. The algorithm is: sample a batch of answers, throw away the wrong ones, maximize the log-likelihood of the right ones. It is the simplest possible RL algorithm for binary rewards. You generate your own training data, filter it, and fine-tune on the filtered set.
+The division by $k$ (not $b$) is what makes this an approximation to rejection sampling rather than vanilla REINFORCE. This is just supervised learning on the correct samples from the batch: generate your own training data, filter it, and fine-tune on the filtered set.
 
 I've written the updates above as SGD steps, but you can use any optimizer. Adam is standard in practice. The gradient estimator is the same regardless of which optimizer consumes it.
 
@@ -890,7 +892,7 @@ What happens when you change the gradient weights $Z_i$? It turns out the effect
 |---|---|
 | Vanilla REINFORCE | $t$ |
 | GRPO | $\frac{2}{\pi}\arcsin(\sqrt{t})$ |
-| Rejection sampling | $\log(t)$ |
+| Rejection sampling | $1 + \log(t)$ |
 
 All three are monotone increasing on $[0, 1]$. Maximizing any of them is equivalent to maximizing $P(\text{correct})$, since monotone transformations preserve the location of the optimum.
 
@@ -898,7 +900,7 @@ Figure 8.1 plots these functions side by side.
 
 ![Rescaling functions](figures/rescaling_functions.png)
 
-*Figure 8.1: The rescaling functions $\phi(t)$ for vanilla REINFORCE ($\phi(t) = t$), GRPO ($\phi(t) = \frac{2}{\pi}\arcsin(\sqrt{t})$), and rejection sampling ($\phi(t) = \log(t)$) on $[0, 1]$. All three are monotone increasing. They differ in how aggressively they weight improvements at different levels of $P(\text{correct})$: GRPO is concave and provides more gradient signal when $P(\text{correct})$ is small, while rejection sampling diverges to $-\infty$ at $t = 0$, providing an infinite penalty for zero accuracy. The key takeaway: they all optimize the same thing, just with different curvature. (Replicates the style of Figures 1 and 3 from Davis and Recht, 2025.)*
+*Figure 8.1: The rescaling functions $\phi(t)$ for vanilla REINFORCE ($\phi(t) = t$), GRPO ($\phi(t) = \frac{2}{\pi}\arcsin(\sqrt{t})$), and rejection sampling ($\phi(t) = 1 + \log(t)$) on $[0, 1]$. The rejection sampling curve is shifted by $+1$ so all three pass through $(1, 1)$. All three are monotone increasing, so maximizing any of them is equivalent to maximizing $P(\text{correct})$.*
 
 I'm not sure what the practical benefit of different reweighting strategies is, other than to give different weights to questions whose success probability is lower or higher. [Heckel, Soltanolkotabi, and Thramboulidis (2026)](https://arxiv.org/abs/2602.11128){:target="_blank"} found some benefit from asymmetric prompt weighting that upweights prompts with low success probability, particularly in from-scratch RL training. I think what matters most is that the base model must have some nontrivial probability of sampling a correct answer at all. No amount of clever rescaling will help if $P(\text{correct}) = 0$.
 
