@@ -858,7 +858,7 @@ $$
 
 GRPO normalizes the rewards within the batch: subtracts the mean and divides by the standard deviation. People claimed this was the secret sauce that made DeepSeek work. Last year, everyone kept repeating "GRPO GRPO GRPO." It was pretty annoying.
 
-For **rejection sampling**: when rewards are binary ($r(Y) \in \{0, 1\}$), keep sampling from $p_\theta(\cdot \mid X)$ until you get a correct answer $Y$, then take a gradient step on $\nabla_\theta \log p_\theta(Y \mid X)$. This gives the $\log$ rescaling (Section 8.2) because the expected number of samples per update is $1/P(\text{correct})$, so the effective cost per step depends on the current success probability.
+For **rejection sampling** ([Xiong et al., 2025](https://arxiv.org/abs/2504.11343){:target="_blank"}): when rewards are binary ($r(Y) \in \{0, 1\}$), keep sampling from $p_\theta(\cdot \mid X)$ until you get a correct answer $Y$, then take a gradient step on $\nabla_\theta \log p_\theta(Y \mid X)$. This gives the exact $\log$ rescaling (Section 8.2) because the expected number of samples per update is $1/P(\text{correct})$, so the effective cost per step depends on the current success probability.
 
 In practice, nobody actually resamples until success. Instead, you sample a batch of $b$ answers, throw away the wrong ones, and average the gradient over the $k$ correct ones:
 
