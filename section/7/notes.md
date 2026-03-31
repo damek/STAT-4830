@@ -290,7 +290,13 @@ A related issue: the REINFORCE gradient estimator is **noisy**. Each sample $Y$ 
 
 ### 5.2 Baselines
 
-There is a standard trick people use. We can subtract any constant $b$ (independent of $Y$) from the reward without changing the expected gradient. The reason is simple. Since the probabilities sum to 1:
+When all rewards are non-negative, every gradient weight $r(Y)$ is non-negative too. REINFORCE can only push probabilities *up*, never down. In a tiny action space this is fine: pushing some probabilities up forces the rest down, because they must sum to 1. But in language modeling the output space is astronomically large. Pushing up a handful of sampled sequences barely dents the probability of everything else. The normalization constraint spreads the "push down" across so many alternatives that each one moves by a negligible amount.
+
+A baseline fixes this. Subtracting the mean reward from each sample's weight gives some samples *negative* weight, so REINFORCE explicitly pushes their probabilities down.
+
+![Baseline intuition](figures/baseline_intuition.png)
+
+**Why this works mathematically.** We can subtract any constant $b$ (independent of $Y$) from the reward without changing the expected gradient. The reason is simple. Since the probabilities sum to 1:
 
 $$
 \sum_Y \nabla_\theta p_\theta(Y \mid X) = \nabla_\theta \sum_Y p_\theta(Y \mid X) = \nabla_\theta 1 = 0.
