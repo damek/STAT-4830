@@ -30,13 +30,13 @@ title: Table of Contents
 [6. A step-by-step introduction to diffusion models](section/6/notes.md)
    > Diffusion models from first principles: forward process, reverse process, noise prediction, U-Net, sampling, DDIM, conditional generation, and FID.
 
+[7. Reinforcement learning for language models](section/7/notes.md)
+   > The REINFORCE gradient estimator, baselines, KL penalties, rejection sampling, gradient weight rescaling, and a reward shaping experiment on Shakespeare.
+
    
 ---
 
 Some 2025 content below; yet to be deleted.
-
-[7. Stochastic gradient descent: insights from the Noisy Quadratic Model](section/7/notes.md)
-   > When should we use exponential moving averages, momentum, and preconditioning?
 
 [8. Stochastic Gradient Descent: The general problem and implementation details](section/8/notes.md) | [Notebook](https://colab.research.google.com/github/damek/STAT-4830/blob/main/section/8/notebook.ipynb)
    > Stochastic optimization problems, SGD, tweaks, and implementation in PyTorch
