@@ -1,1075 +1,655 @@
 ---
 layout: course_page
-title: Stochastic Gradient Descent - The General Problem and Implementation Details
+title: More on optimizers
 ---
 
-# Stochastic Gradient Descent: The general problem and implementation details
-
-1. [cheatsheet](cheatsheet.md)
-2. [notebook](https://colab.research.google.com/github/damek/STAT-4830/blob/main/section/8/notebook.ipynb)
+# 8. More on optimizers
 
 ## Table of contents
-1. [Introduction](#introduction)
-2. [Stochastic Optimization Problems](#stochastic-optimization-problems)
-3. [Stochastic Gradient Descent and Variants](#stochastic-gradient-descent-and-variants)
-4. [Implementation Details in PyTorch](#implementation-details-in-pytorch)
-5. [Advanced Tweaks](#advanced-tweaks)
-6. [A Minimal Working Implementation](#a-minimal-working-implementation)
+1. [Where we are](#1-where-we-are)
+2. [Algorithm modifiers](#2-algorithm-modifiers)
+3. [Techniques that change the problem](#3-techniques-that-change-the-problem)
+4. [Different algorithms](#4-different-algorithms)
+5. [Why coordinate-wise scaling](#5-why-coordinate-wise-scaling)
+6. [Newton's method](#6-newtons-method)
+7. [Beyond Adam: Muon](#7-beyond-adam-muon)
 
-## Introduction
+## 1. Where we are
 
-In Lectures [6](6/notes.md) and [7](7/notes.md), we analyzed stochastic gradient descent (SGD) on simple problems. [Lecture 6](6/notes.md) examined SGD for mean estimation, showing how sampling individual data points can replace full-batch calculations while preserving convergence. [Lecture 7](7/notes.md) used the noisy quadratic model (NQM) to analyze how methods like momentum, exponential moving average (EMA), and preconditioning affect optimization, particularly for poorly conditioned problems.
+In this class we've covered:
 
-Our analysis revealed several key properties: SGD with constant learning rate converges to a region around the optimum rather than the exact solution; this steady-state behavior can be managed through techniques like mini-batching and parameter averaging; and different algorithmic variants perform better under different batch size regimes. Specifically, EMA works best with small batch sizes by reducing steady-state risk, while momentum and preconditioning excel with large batch sizes by accelerating convergence from initialization.
+1. **Basic algorithms** — gradient descent and SGD.
+2. **Problem formulations** — neural networks, transformers, diffusion models.
+3. **Other paradigms** — RL.
 
-These previous lectures focused on simple problems with analytical solutions – estimating a mean or minimizing a quadratic function. Practical machine learning involves more complex loss landscapes and models. Implementing these methods also depends on understanding details of libraries like PyTorch.
+So now I'm trying to think through what is actually useful to tell you about other optimizers.
 
-This lecture introduces general stochastic optimization problems and practical implementation in PyTorch. The first half generalizes stochastic optimization beyond mean estimation and quadratics to standard machine learning scenarios. We'll examine additional SGD variants, including weight decay and learning rate schedules. The second half covers implementation aspects: data loading, model definition, gradient computation, and parameter updates in PyTorch.
+The truth is there are a million optimizers and each helps in different scenarios. But without getting into the math and geometric structure underlying each one, I don't think it would be possible to follow the arguments for why one is better than another. That's a many-weeks diversion. And is it really useful?
 
-## Stochastic Optimization Problems
+As an "intelligent user of optimization" — which is what I hoped you would get from this class — most of the time you're not the first person who tried to optimize the problem you're trying to optimize. There is usually a repo. You're modifying it, changing stepsizes, etc. And the basic principles — batch size, noise floor, stepsize — we've already covered.
 
-### General Formulation
+So what is the use of trying to explain the geometric structure that leads to faster convergence of one method over another when:
 
-Stochastic optimization encompasses problems where the objective function is an expectation over random inputs or can be approximated using random samples. In machine learning, we typically minimize an empirical risk of the form:
+- We can't verify that structure exists outside of highly idealized models.
+- You're not going to have a career in designing and analyzing optimization methods. (That career path has largely ended in the last 10 years or so. Instead you have to do a lot more empirical work to understand what's working and what's not, and there is no sense in making up reasons why one thing helps and another doesn't.)
+- It's a matter of looking at a plot, changing something, and observing the effect. Outside of rigid problem classes like convexity, we can't really say much. So let's just not pretend.
 
-$$L(w) = \frac{1}{n}\sum_{i=1}^n \ell(w, x_i, y_i)$$
+Instead, let me try something different. We're going to lay out all the tools available to you and show you what each one computes.
 
-This objective function represents the average loss over a dataset of $n$ examples, where $w \in \mathbb{R}^d$ contains the model parameters (weights), $(x_i, y_i)$ is a training example with input $x_i$ and label $y_i$, and $\ell(w, x_i, y_i)$ measures the prediction error for a single example.
+### 1.1 Setting the stage
 
-This formulation generalizes our previous mean estimation example ([Lecture 6](../6/notes.md)), the loss function was $\ell(w, x_i) = \frac{1}{2}(w - x_i)^2$ with a scalar parameter $w$. 
-> In [Lecture 7](../7/notes.md), we analyzed the noisy quadratic model with loss function $L(w) = \frac{1}{2}(h_1 w_1^2 + h_2 w_2^2)$. Though not a stochastic optimization problem in the standard sense, we still applied stochastic gradient methods by assuming access to unbiased gradient estimators at each iteration.
-
-The key challenge in stochastic optimization stems from the summation over $n$ examples. For large datasets, computing the full gradient:
-
-$$\nabla L(w) = \frac{1}{n}\sum_{i=1}^n \nabla_w \ell(w, x_i, y_i)$$
-
-becomes computationally prohibitive. Each gradient evaluation requires a pass through the entire dataset, which may contain millions of examples. The computational cost of a single gradient step scales linearly with $n$.
-
-Traditional gradient descent iterates:
-
-$$w_{k+1} = w_k - \alpha \nabla L(w_k)$$
-
-This requires evaluating the full gradient at each step - processing all $n$ examples. For modern datasets where $n$ could be in the millions or billions, this approach quickly becomes infeasible.
-
-The core insight of stochastic methods is that we can replace the exact gradient $\nabla L(w)$ with an unbiased estimate based on a small subset of examples. This maintains convergence guarantees while dramatically reducing the per-iteration computational cost.
-
-For any indexed subset $B \subset \{1,2,...,n\}$, we can form an unbiased gradient estimate:
-
-$$g(w, B) = \frac{1}{|B|}\sum_{i \in B} \nabla_w \ell(w, x_i, y_i)$$
-
-This satisfies $\mathbb{E}[g(w, B)] = \nabla L(w)$ when $B$ is chosen uniformly at random. The variance of this estimator depends on the batch size $ \|B\| $ and the inherent variability in individual gradients. As we saw in previous lectures, this introduces a fundamental trade-off between computational efficiency and estimation accuracy.
-
-### Example Problems
-
-Let's examine concrete instances of stochastic optimization problems commonly encountered in machine learning. These examples illustrate how various models fit into our general framework.
-
-#### Linear Regression
-
-In linear regression, we predict a real-valued output as a linear function of input features:
-
-$$f_w(x) = w^T x + b$$
-
-For simplicity, we can absorb the bias term $b$ into $w$ by augmenting $x$ with a constant feature of 1. The squared error loss for a single example is:
-
-$$\ell(w, x_i, y_i) = \frac{1}{2}(w^T x_i - y_i)^2$$
-
-The full objective becomes:
-
-$$L(w) = \frac{1}{2n}\sum_{i=1}^n (w^T x_i - y_i)^2 = \frac{1}{2n}\|Xw - y\|_2^2$$
-
-where $X \in \mathbb{R}^{n \times d}$ stacks all input vectors as rows, and $y \in \mathbb{R}^n$ contains all target values. The gradient for a single example is:
-
-$$\nabla_w \ell(w, x_i, y_i) = (w^T x_i - y_i)x_i$$
-
-While this problem has a closed-form solution $(X^TX)^{-1}X^Ty$, computing it requires $O(nd^2 + d^3)$ operations. When $n$ or $d$ is large, stochastic methods become more practical, as we saw in [Lecture 3](../3/notes.md).
-
-#### Logistic Regression
-
-For binary classification where $y_i \in \{0,1\}$, logistic regression models the probability of class 1:
-
-$$P(y=1|x) = \sigma(w^T x) = \frac{1}{1 + e^{-w^T x}}$$
-
-where $\sigma(z)$ is the sigmoid function. We minimize the negative log-likelihood:
-
-$$\ell(w, x_i, y_i) = -y_i \log(\sigma(w^T x_i)) - (1-y_i) \log(1-\sigma(w^T x_i))$$
-
-This loss, called binary cross-entropy, measures the discrepancy between predicted probabilities and true labels. The gradient is:
-
-$$\nabla_w \ell(w, x_i, y_i) = (\sigma(w^T x_i) - y_i)x_i$$
-
-Unlike linear regression, logistic regression has no closed-form solution. Optimization requires iterative methods, and stochastic approaches scale efficiently to large datasets.
-
-#### Neural Networks
-
-Neural networks extend these ideas to more complex, non-linear models:
-
-$$f_w(x) = f_L(f_{L-1}(...f_1(x; w_1)...; w_{L-1}); w_L)$$
-
-where each $f_l$ is a layer with parameters $w_l$, and $w = (w_1, w_2, ..., w_L)$ collectively represents all parameters. Common layers include:
-
-- Linear: $f_l(z) = W_l z + b_l$
-- Activation: $f_l(z) = \phi(z)$ where $\phi$ is a non-linear function like ReLU: $\phi(z) = \max(0, z)$
-
-The loss function depends on the task - mean squared error for regression or cross-entropy for classification. What's crucial is that, despite the model's complexity, the optimization problem still fits our general framework:
-
-$$L(w) = \frac{1}{n}\sum_{i=1}^n \ell(w, x_i, y_i)$$
-
-The per-example gradients $\nabla_w \ell(w, x_i, y_i)$ can be efficiently computed using backpropagation, allowing us to apply stochastic methods even to models with millions of parameters.
-
-These examples demonstrate how diverse machine learning problems conform to the same mathematical structure - an average loss over training examples. This common structure enables us to apply the same stochastic optimization techniques across different models and tasks.
-
-### Empirical vs. Population Risk
-
-Machine learning aims to make predictions on unseen data, not just memorize training examples. This distinction leads to two critical concepts: empirical risk and population risk.
-
-The **empirical risk** is what we've been discussing so far:
-
-$$L_{\text{emp}}(w) = \frac{1}{n}\sum_{i=1}^n \ell(w, x_i, y_i)$$
-
-It measures average performance on the training dataset. In contrast, the **population risk** (or true risk) measures expected performance on the entire distribution of possible examples:
-
-$$L_{\text{pop}}(w) = \mathbb{E}_{(x,y) \sim \mathcal{D}}[\ell(w, x, y)]$$
-
-where $\mathcal{D}$ is the underlying data distribution. The empirical risk $L_{\text{emp}}(w)$ is merely a finite-sample approximation of $L_{\text{pop}}(w)$.
-
-In practice, we can only minimize the empirical risk since we don't have access to the full distribution. However, our actual goal is to minimize the population risk. This creates a fundamental tension in machine learning: the parameters that minimize empirical risk may not minimize population risk, especially when models are complex enough to memorize the training data.
-
-Statistical learning theory provides bounds on the gap between empirical and population risk. For instance, under certain conditions, with probability at least $1-\delta$, we have:
-
-$$L_{\text{pop}}(w) \leq L_{\text{emp}}(w) + \mathcal{O}\left(\sqrt{\frac{\text{complexity}(w) + \log(1/\delta)}{n}}\right)$$
-
-where $\text{complexity}(w)$ measures the capacity or flexibility of the model class. This bound gets tighter as $n$ increases, but wider as model complexity increases.
-
-Intriguingly, stochastic optimization methods like SGD can sometimes provide an *implicit* form of regularization that can improve generalization beyond what's achieved by minimizing empirical risk exactly. There are many explanations for why this may be the case. The most believable explanation to me is that SGD tends to converge to "low-complexity" solutions and such solutions generalize better. But the truth is no one knows why this happens. 
-
-This relationship between optimization and generalization highlights a surprising fact: the "best" optimization algorithm from a pure convergence perspective isn't necessarily best for machine learning. Methods that converge more slowly or noisily may actually generalize better by avoiding overly complex solutions. This insight has implications for algorithm design and hyperparameter selection in practice.
-
-## Stochastic Gradient Descent and Variants
-
-### The Spectrum of Noise
-
-Stochastic optimization methods exist on a spectrum based on the amount of noise in their gradient estimates. This noise comes from using subsets of data rather than the full dataset to compute gradient steps. Let's examine three points on this spectrum, from least to most noisy.
-
-**Full Gradient Descent (GD)** uses the entire dataset to compute each gradient:
-
-$$w_{k+1} = w_k - \alpha \nabla L(w_k) = w_k - \alpha \frac{1}{n}\sum_{i=1}^n \nabla \ell(w_k, x_i, y_i)$$
-
-This approach provides exact gradient information but requires a full pass through the dataset for each iteration. The computational cost per step is $O(n m)$ where $n$ is the number of examples and $m$ is the cost of computing the gradient for a single example. For large datasets (billions of examples), this becomes prohibitively expensive.
-
-**Mini-batch Stochastic Gradient Descent (mini-batch SGD)** computes gradients on randomly sampled subsets of data:
-
-$$w_{k+1} = w_k - \alpha \frac{1}{|B_k|}\sum_{i \in B_k} \nabla \ell(w_k, x_i, y_i)$$
-
-Here, $B_k \subset \{1,2,...,n\}$ is a random mini-batch of size $b = |B_k| \ll n$. The gradient estimate has:
-- Mean: $\mathbb{E}[g(w_k)] = \nabla L(w_k)$ (unbiased)
-- Variance: $\text{Var}[g(w_k)] \propto \frac{1}{b}$ (inversely proportional to batch size)
-
-The computational cost per step drops to $O(bm)$, making each iteration much faster. However, the noisy gradient estimates introduce stochasticity into the optimization trajectory.
-
-**Pure Stochastic Gradient Descent (pure SGD)** represents the extreme case where each gradient is computed on a single randomly selected example:
-
-$$w_{k+1} = w_k - \alpha \nabla \ell(w_k, x_{i_k}, y_{i_k})$$
-
-With $i_k$ chosen uniformly at random from $\{1,2,...,n\}$. This corresponds to mini-batch SGD with $b=1$. Pure SGD has:
-- Fastest per-iteration computation ($O(m)$ operations)
-- Highest variance in gradient estimates
-- Noisiest optimization trajectory
-
-The trade-off between these methods involves balancing computational cost against gradient accuracy. As we move from full GD to pure SGD, we reduce computation per iteration but increase variance. This affects convergence in several ways:
-
-1. **Convergence rate**: With constant learning rate $\alpha$, all three methods initially converge at a fast rate (e.g., in [Lecture 6](../6/notes.md) we saw that the initialize error decays as $(1-\alpha h)^k$ for mean estimation problems). However, with larger learning rates, mini-batch and pure SGD can initially make faster progress by processing more examples in the same computation time.
-
-2. **Steady-state behavior**: As shown in on the toy model in [Lecture 7](../7/notes.md), stochastic methods don't converge to the exact optimum with constant learning rates. Instead, they reach a "noise ball" with radius typically proportional to $\sqrt{\frac{\alpha}{b}}$, where larger batch sizes $b$ reduce the final error.
-
-3. **Computational efficiency**: While SGD and mini-batch SGD make noisier progress, they process data more efficiently. In wall-clock time, they often reach approximate solutions faster than full GD.
-
-The following table summarizes these trade-offs:
-
-| Method | Batch Size | Per-step Cost | Gradient Variance | Steady-State Error |
-|--------|------------|---------------|-------------------|-------------------|
-| Full GD | $n$ | $O(n m)$ | Zero | Zero (with $\alpha$ small enough) |
-| Mini-batch SGD | $b$ | $O(bm)$ | $O(1/b)$ | $O(\sqrt{\alpha/b})$ |
-| Pure SGD | 1 | $O(m)$ | $O(1)$ | $O(\sqrt{\alpha})$ |
-
-In practice, mini-batch SGD with carefully chosen batch size offers the best balance. If you look through training code, you'll see that common batch sizes range from 32 to 512, though larger values (1024-8192) have become popular for distributed training. The emergence of specialized hardware like GPUs has also influenced this choice, as specific batch sizes maximize computational efficiency on these devices.
-
-
-#### Sampling Without Replacement: Epoch-based Shuffling
-
-So far, our analysis of SGD assumed sampling mini-batches independently and uniformly at random *with replacement* from the dataset. In practice, however, implementations typically use *sampling without replacement*, also known as *epoch-based shuffling*. An *epoch* refers to one complete pass over the entire dataset.
-
-Mathematically, epoch-based shuffling is performed as follows:
-
-1. **Shuffle** the dataset indices at the start of each epoch. Formally, given the dataset $\{(x_i, y_i)\}_{i=1}^{n}$, generate a random permutation $\pi$ of the indices $\{1, 2, \dots, n\}$.
-
-2. **Partition** this shuffled sequence into contiguous mini-batches of size $b$. Formally, the mini-batches for the epoch become:
+We're dealing with the same optimization problem as before:
 
 $$
-B_1 = \{\pi(1), \pi(2), \dots, \pi(b)\},\quad B_2 = \{\pi(b+1), \pi(b+2), \dots, \pi(2b)\},\quad \dots,\quad B_{\lceil n/b \rceil}
+L(\theta) = \frac{1}{n}\sum_{i=1}^n \ell_i(\theta).
 $$
 
-3. **Perform a full pass** over the dataset, iteratively updating parameters for each batch $B_k$:
+Here $\theta$ is our parameters. In deep learning, it usually describes a list of weight matrices $\theta = (W_1, \ldots, W_L)$. Sometimes it's useful to leverage that structure — at least one algorithm we describe will use it. But it can also have bias vectors and other stuff we'll ignore.
+
+Let's recall very quickly what we did in Lectures 1 and 2.
+
+**Gradient descent:** compute the gradient, step in that direction.
 
 $$
-
-w_{k+1} = w_k - \alpha \frac{1}{|B_k|}\sum_{i \in B_k}\nabla \ell(w_k, x_i, y_i), \quad k = 1, 2, \dots, \lceil n/b \rceil
-
+\theta_{k+1} = \theta_k - \eta \nabla L(\theta_k).
 $$
 
+Set a stepsize — too big you blow up, too little no progress. Main issue: not implementable for large-scale problems because you have to compute the gradient of every term $\ell_i$.
 
-Under this approach, each example appears exactly once per epoch. The theoretical analysis of sampling without replacement is more challenging. Empirical results typically favor this method.
+**SGD:** sample an index (or minibatch), step in that sample's gradient direction. Set a stepsize: too small, nothing; constant, hit the noise floor; too big, blow up. Key thing that mattered: variance of the gradient controls speed of the method. Minibatches reduce variance. Larger minibatch means you can increase the stepsize up to a point because the noise floor lowers. See that lecture for details.
 
-### 3.2 Previously Discussed Tweaks
+### 1.2 The PyTorch optimizer interface
 
-In [Lecture 7](../7/notes.md), we analyzed three important variants of SGD under the noisy quadratic model (NQM). Here we briefly recap these methods and their key properties on the NQM. We note that while the results of the NQM paper applied only to a simple quadratic optimization problem, a main contribution of the work was to show that the behavior of these methods transfers to deep learning problems. 
-
-**Momentum** accelerates convergence by incorporating a running average of past gradients:
-
-$$\begin{aligned}
-m_{k+1} &= \beta m_k + g(w_k) \\
-w_{k+1} &= w_k - \alpha m_{k+1}
-\end{aligned}$$
-
-where $g(w_k)$ is the stochastic gradient at iteration $k$, and $\beta \in [0, 1)$ is the momentum parameter. This modification has two key effects on NQM:
-
-1. **Accelerated convergence**: Momentum reduces the impact of initialization error, particularly for ill-conditioned problems. Under the NQM, the convergence rate improves from $(1-\alpha h_i)^k$ to approximately $(1-\frac{\alpha h_i}{1-\beta})^k$ in the overdamped regime ($\beta < (1-\sqrt{\alpha h_i})^2$). This acceleration is especially valuable when the condition number $\kappa = \frac{h_1}{h_2}$ is large.
-
-2. **Amplified steady-state risk**: Momentum increases the steady-state variance by a factor of approximately $\frac{1+\beta}{1-\beta}$, making the "noise ball" around the optimum larger.
-
-These properties make momentum most beneficial in the large batch size regime, where steady-state risk is naturally small and the primary concern is reducing initialization error.
-
-**Exponential Moving Average (EMA)** averages parameter values rather than gradients:
-
-$$\begin{aligned}
-w_{k+1} &= w_k - \alpha g(w_k) \\
-\tilde{w}_{k+1} &= \gamma \tilde{w}_k + (1-\gamma) w_{k+1}
-\end{aligned}$$
-
-where $\gamma \in [0, 1)$ is the EMA decay parameter. The key properties of EMA on NQM include:
-
-1. **Reduced steady-state risk**: EMA dampens parameter oscillations, reducing the steady-state variance by a factor of approximately $\frac{(1-\gamma)(1+(1-\alpha h_i)\gamma)}{(1+\gamma)(1-(1-\alpha h_i)\gamma)}$ without sacrificing convergence rate.
-
-2. **Preserved convergence rate**: The initialization error still decays at approximately the same rate as standard SGD.
-
-EMA is most effective in the small batch size regime, where steady-state risk dominates and reducing noise is the primary concern.
-
-**Preconditioning** modifies the update rule of SGD by "rescaling" the gradient by the inverse of an invertible matrix $P$: 
-
-$$
-w_{k+1} = w_k - \alpha P^{-1} g(w_k)
-$$
-
-In machine learning practice, preconditioners are often taken to be diagonal due to the difficulty of inverting the matrix $P$. For example, we saw in [Lecture 7](../7/notes.md) that the preconditioner for the NQM was $P = \text{diag}(h_1, h_2)$. This ammounts to applying dimension-specific learning rates to balance convergence across different parameter components:
-
-$$\begin{aligned}
-w_{k+1,i} &= w_{k,i} - \alpha h_i^{-p} g_i(w_k) \\
-\end{aligned}$$
-
-where $p \in [0, 1]$ controls the degree of preconditioning. In NQM, we saw that this approach had two effects:
-
-1. **Balanced convergence rates**: Preconditioning accelerates convergence in dimensions with small curvature ($h_i$ small), changing the rate from $(1-\alpha h_i)^k$ to $(1-\alpha h_i^{1-p})^k$. This helps address the condition number problem.
-
-2. **Increased steady-state risk**: The steady-state variance increases, particularly in dimensions with small curvature, by a factor roughly proportional to $h_i^{-p}$.
-
-Like momentum, preconditioning is most beneficial in the large batch size regime, where initialization error dominates and the increased steady-state risk is less problematic.
-
-The table below summarizes these methods and their primary effects:
-
-| Method | Updates Equation | Effect on Initialization Error | Effect on Steady-State Risk | Best Batch Size Regime |
-|--------|------------------|--------------------------------|-----------------------------|-----------------------|
-| Momentum | $m_{k+1} = \beta m_k + g(w_k)$ <br> $w_{k+1} = w_k - \alpha m_{k+1}$ | Reduces by accelerating convergence | Increases by factor $\frac{1+\beta}{1-\beta}$ | Large |
-| EMA | $w_{k+1} = w_k - \alpha g(w_k)$ <br> $\tilde{w}\_{k+1} = \gamma \tilde{w}\_k + (1-\gamma) w\_{k+1}$ | Minimal effect | Reduces significantly | Small |
-| Preconditioning | $w_{k+1} = w_{k} - \alpha P^{-1} g(w_k)$ | Reduces by balancing convergence rates | Increases, especially in low-curvature dimensions | Large |
-
-Understanding these trade-offs helps select the appropriate method based on problem characteristics and computational constraints.
-
-### Weight Decay
-
-Weight decay is one of the most widely used regularization techniques in machine learning. Unlike the algorithmic modifications of SGD that we've discussed previously, weight decay directly modifies the objective function by adding a penalty on parameter magnitude:
-
-$$L_{\text{wd}}(w) = L(w) + \frac{\lambda}{2}\|w\|_2^2 = \frac{1}{n}\sum_{i=1}^n \ell(w, x_i, y_i) + \frac{\lambda}{2}\sum_{j=1}^d w_j^2$$
-
-Here, $\lambda > 0$ is the weight decay coefficient that controls the strength of regularization. This penalty encourages the optimization to find solutions with smaller parameter values. If you're a Bayesian, you can interpret this as effectively imposing a Gaussian prior on the parameters. But remember *you're not any particularly kind of person* and behaving as if you were is one way to limit growth in life.
-
-> Caution: for adaptive optimizers like Adam, weight decay is not simply $\ell_2$ regularization of the parameters, although it may have a similar effect. We'll touch more on this in future lectures.
-
-The gradient of this modified objective becomes:
-
-$$\nabla L_{\text{wd}}(w) = \nabla L(w) + \lambda w$$
-
-Consequently, the SGD update rule with weight decay is:
-
-$$w_{k+1} = w_k - \alpha (\nabla L(w_k) + \lambda w_k) = (1 - \alpha\lambda)w_k - \alpha \nabla L(w_k)$$
-
-This implementation reveals the origin of the term "weight decay": in each iteration, parameters are first scaled by a factor $(1-\alpha\lambda)$ before the gradient update. With $\alpha\lambda < 1$, this factor shrinks (decays) the weights toward zero.
-
-Weight decay serves several important purpose: It directly penalizes model complexity. The $L_2$ penalty encourages the model to use all features moderately rather than relying heavily on a few. For quadratic problems, weight decay effectively adds $\lambda$ to all eigenvalues of the Hessian. This reduces the condition number, making optimization easier, particularly for ill-conditioned problems. The same benefit applies to problems beyond quadratic optimization. By limiting parameter magnitudes, weight decay can improve numerical stability during training, especially for deep networks.
-
-Weight decay is not discussed in our NQM analysis in [Lecture 7](../7/notes.md). However, it can be analyzed in that framework by modifying the loss function to include the quadratic penalty. It's straightforward to check that the effect is to change the loss to 
-
-$$
-L(w) = \frac{1}{2}(h_1 + \lambda)w_1^2 + \frac{1}{2}(h_2 + \lambda)w_2^2,
-$$
-
- which improves the condition number $\kappa = \frac{h_1}{h_2}$ from $h_1/h_2$ to $(h_1 + \lambda)/(h_2 + \lambda)$. Note that as $\lambda \to \infty$, the condition number approaches 1, making the problem perfectly conditioned. The issue with taking very large $\lambda$ is that it shifts the optimum away from the true minimum. So choosing the right $\lambda$ is a balance between improving conditioning and shifting the optimum too far away. 
-
-In practice, weight decay values typically range from 1e-5 to 1e-3. A good choice of $\lambda$ depends on the dataset size, model architecture, and other regularization techniques employed.
-
-### Learning Rate Schedules
-
-Learning rate schedules systematically decrease the learning rate $\alpha$ during training. This addresses a fundamental limitation of constant learning rate SGD: the steady-state "noise ball" we analyzed in previous lectures. With constant $\alpha$, SGD converges to a region around the optimum with radius roughly proportional to $\sqrt{\alpha}$. Learning rate schedules can progressively shrink this noise ball, potentially reaching the exact optimum.
-
-The basic approach replaces the constant learning rate $\alpha$ with a sequence $\{\alpha_k\}_{k=1}^{\infty}$ that decreases over time. The SGD update becomes:
-
-$$w_{k+1} = w_k - \alpha_k g(w_k)$$
-
-Several common schedules exist, each with different properties:
-
-![lrschedules](figures/lrschedules.png)
-
-**Step Decay** reduces the learning rate by a factor $\gamma < 1$ every $s$ steps:
-
-$$\alpha_k = \alpha_0 \cdot \gamma^{\lfloor k/s \rfloor}$$
-
-For example, with $\gamma = 0.1$ and $s = 30$, the learning rate drops to 10% of its initial value after 30 iterations, to 1% after 60 iterations, and so on. This approach is simple and widely used, particularly in computer vision tasks.
-
-**Exponential Decay** continuously decreases the learning rate by a multiplicative factor:
-
-$$\alpha_k = \alpha_0 \cdot \gamma^k$$
-
-where $0 < \gamma < 1$ controls the decay speed. This creates a smooth, exponential decrease rather than the sharp drops of step decay.
-
-**$1/t$ Decay** follows a hyperbolic trajectory:
-
-$$\alpha_k = \frac{\alpha_0}{1 + \beta k}$$
-
-where $\beta > 0$ controls the decay rate. This schedule is particularly significant because it has theoretical convergence guarantees for convex problems. When $\beta$ is properly chosen, SGD with $1/t$ decay converges to the exact minimum at a rate of $O(1/k)$ for strongly convex functions.
-
-**Cosine Annealing** follows a cosine function:
-
-$$\alpha_k = \alpha_{\min} + \frac{1}{2}(\alpha_0 - \alpha_{\min})\left(1 + \cos(\frac{k\pi}{K})\right)$$
-
-where $K$ is the total number of iterations and $\alpha_{\min}$ is the minimum learning rate. This creates a smooth decline that starts slow, accelerates in the middle, and then slows again near the end.
-The theoretical motivation comes from optimization theory: constant learning rates produce iterates with variance lower-bounded by a positive constant proportional to $\alpha$. Decreasing $\alpha$ systematically shrinks this variance, preserving early rapid progress and later enabling convergence closer to the optimum.
-
-Practically, learning rate schedules significantly improve the final accuracy of models. Step decay has historically been popular due to its simplicity and effectiveness. More recently, cosine annealing has shown strong empirical performance, particularly for deep learning tasks. The choice of schedule interacts with other optimization parameters:
-
-- Initial learning rate $\alpha_0$: Must be carefully chosen regardless of schedule.
-- Momentum: Often kept constant while learning rate decreases.
-- Batch size: Indirectly affects schedules. Optimal schedule parameters (e.g., decay rate or timing) often depend on batch size, but no schedule type is inherently "better" for specific batch sizes.
-
-Learning rate schedules dynamically manage the bias-variance trade-off: early large steps enable rapid progress, and later smaller steps ensure precise convergence to minima.
-
-
-## Implementation Details in PyTorch
-
-The following diagram illustrates the complete SGD training loop in PyTorch, showing how data flows through the model, gradients propagate backward, and parameters are updated. This diagram provides a roadmap for the implementation details we'll examine in the following sections.
-
-```ASCII
-                         SGD TRAINING LOOP IN PYTORCH
-                         ============================
-
-EPOCH LOOP +-------------------------------------------------------------+
-           |                                                             |
-           v                                                             |
-    +-------------+                                                      |
-    | DATASET     |        +------------------------+                    |
-    |             |        | DATALOADER             |                    |
-    | [x₁,y₁]     +------->| for batch_x, batch_y   |                    |
-    | [x₂,y₂]     |        | in dataloader:         |                    |
-    | [x₃,y₃]     |        +------------------------+                    |
-    | ...         |                   |                                  |
-    +-------------+                   | SAMPLING                         |
-                                      | (w/ or w/o replacement)          |
-                                      v                                  |
-+-------------------+        +------------------+                        |
-| 5. PARAM UPDATE   |        | MINI-BATCH       |                        |
-|                   |        | [x₂,y₂]          |                        |
-| optimizer.step()  |        | [x₇,y₇]  SHUFFLE |                        |
-|                   |        | [x₄,y₄]  ↺↺↺↺↺↺  |                        |
-| w ← w - α∇L       |        +------------------+                        |
-|                   |                |                                   |
-| LEARNING RATE     |                |                                   |
-| SCHEDULER         |                v                                   |
-| scheduler.step()  |        +------------------+                        |
-|                   |        | ZERO GRADIENTS   |                        |
-+-------------------+        | optimizer.       |                        |
-        ^                    | zero_grad()      |                        |
-        |                    +------------------+                        |
-        |                            |                                   |
-        |                            v                                   |
-        |                    +------------------+        +---------------+
-        |                    | 1. FORWARD PASS  |        |               |
-        |                    |                  |        |               |
-        |                    | outputs = model( |        |               |
-        |                    |    batch_x)      |        |               |
-        |                    |                  |        |               |
-        |                    | nn.Module        |        |               |
-        |                    +------------------+        |               |
-        |                            |                   |               |
-        |                            | ŷ (predictions)   |               |
-        |                            v                   |               |
-+-------------------+        +------------------+        |               |
-| 4. BACKWARD PASS  |        | 2. LOSS CALC     |        |               |
-|                   |        |                  |        |               |
-| loss.backward()   |        | loss = F.mse_    |        |               |
-|                   |        |   loss(ŷ, batch_y)|       |               |
-| Creates:          |        |                  |        |               |
-| param.grad        |        | + λ||w||² (decay)|        |               |
-|                   |        +------------------+        |               |
-|                   |                |                   |               |
-|                   |                | scalar loss       |               |
-|                   |                v                   |               |
-+-------------------+        +------------------+        |               |
-        ^                    | 3. COMPUTATIONAL |        |               |
-        |                    | GRAPH            |        |               |
-        |                    |                  |        |               |
-        |                    | (autograd builds |        |               |
-        +--------------------+ differentiation  +--------+               |
-                             | pathway)         |                        |
-                             +------------------+                        |
-                                                                         |
-                                                                         |
-BATCH ITERATION LOOP ----------------------------------------------+     |
-                                                                   |     |
-ONE COMPLETE SGD STEP                                              |     |
-+----------------------------------------------------------------+ |     |
-|                                                                | |     |
-| # Zero gradients                                               | |     |
-| optimizer.zero_grad()                                          | |     |
-|                                                                | |     |
-| # Forward pass                                                 | |     |
-| outputs = model(batch_x)                                       | |     |
-| loss = criterion(outputs, batch_y)                             | |     |
-|                                                                | |     |
-| # Backward pass                                                | |     |
-| loss.backward()                                                | |     |
-|                                                                | |     |
-| # Update parameters                                            | |     |
-| optimizer.step()                                               | |     |
-+----------------------------------------------------------------+ |     |
-                                                                   |     |
-+-----------------------------------------------------------------+      |
-                                                                         |
-TRAINING LOOP COMPLETE ---------------------------------------------+----+
-```
-
-### Data Loading and Batch Sampling
-
-PyTorch's data loading pipeline implements the sampling strategies we discussed theoretically, with important practical considerations. The system revolves around two key classes: `Dataset` (data container) and `DataLoader` (batch sampler).
-
-First, let's understand how PyTorch implements mini-batch sampling:
+In PyTorch, no matter which optimizer you pick, the interface is always the same three lines:
 
 ```python
-from torch.utils.data import Dataset, DataLoader
-import torch
+optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
 
-class SimpleDataset(Dataset):
-    def __init__(self, features, labels):
-        self.features = features
-        self.labels = labels
-        
-    def __len__(self):
-        return len(self.features)
-    
-    def __getitem__(self, idx):
-        return self.features[idx], self.labels[idx]
-
-# Create dummy data
-features = torch.randn(1000, 10)  # 1000 samples, 10 features
-labels = torch.randn(1000, 1)     # 1000 labels
-```
-
-The default `DataLoader` implements *sampling without replacement* (epoch-based shuffling) as described in section 3.1.1, rather than the with-replacement sampling assumed in our theoretical analysis:
-
-```python
-# Create dataset and dataloader with sampling WITHOUT replacement
-dataset = SimpleDataset(features, labels)
-dataloader = DataLoader(
-    dataset, 
-    batch_size=32,
-    shuffle=True,     # Shuffle once per epoch
-    num_workers=4,    # Parallel loading threads
-    drop_last=False   # Keep partial final batch
-)
-```
-
-When `shuffle=True`, PyTorch randomly permutes indices once per epoch, partitions them into batches of size `batch_size`, and yields these batches sequentially.
-
-This corresponds exactly to the epoch-based shuffling from section 3.1.1:
-
-```python
-# Training loop with epoch-based shuffling
-for epoch in range(num_epochs):
-    # DataLoader internally shuffles indices once per epoch
-    for batch_idx, (batch_features, batch_labels) in enumerate(dataloader):
-        # Process batch
-        pass
-```
-
-If you require true *sampling with replacement* (as in our theoretical analysis), you must implement a custom sampler:
-
-```python
-from torch.utils.data import RandomSampler
-
-# Create sampler that samples WITH replacement
-sampler = RandomSampler(
-    dataset, 
-    replacement=True,
-    num_samples=len(dataset)  # Same number of samples per epoch
-)
-
-# DataLoader with with-replacement sampling
-dataloader_with_replacement = DataLoader(
-    dataset,
-    batch_size=32,
-    sampler=sampler,  # Cannot use both shuffle=True and sampler
-    num_workers=4
-)
-```
-
-Although sampling with replacement matches our theory, epoch-based shuffling is more common because it visits each example once per epoch, reduces variance slightly, and often performs better in practice.
-
-For extremely large datasets that don't fit in memory, PyTorch supports on-demand loading:
-
-```python
-class LazyDataset(Dataset):
-    def __init__(self, file_paths):
-        self.file_paths = file_paths
-        
-    def __len__(self):
-        return len(self.file_paths)
-    
-    def __getitem__(self, idx):
-        # Replace load_file with your own data-loading function
-        return load_file(self.file_paths[idx])
-```
-
-### Defining the Objective
-
-The optimization objective in PyTorch consists of three components: the model architecture, the loss function, and the gradient computation mechanism. These components work together to create a computational graph that enables automatic differentiation. See for example Lectures [4](../4/notes.md) and [5](../5/notes.md) for more details on computational graphs.
-
-Models in PyTorch are typically defined as subclasses of `nn.Module`, which provides a framework for organizing parameters and forward computations:
-
-```python
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-
-class LinearRegression(nn.Module):
-    def __init__(self, input_dim):
-        super().__init__()
-        self.linear = nn.Linear(input_dim, 1)  # Linear layer with bias
-    
-    def forward(self, x):
-        return self.linear(x)  # Computes x @ weights.T + bias
-```
-
-The key aspects of this implementation include:
-- The `__init__` method initializes model parameters
-- PyTorch automatically registers these parameters for gradient tracking
-- The `forward` method defines the computation from inputs to outputs
-- Parameters are accessible via `model.parameters()` or specifically as `model.linear.weight`
-
-To compute the loss, we combine model predictions with target values using functions from `torch.nn.functional`:
-
-```python
-# For regression
-predictions = model(features)  # Forward pass
-loss = F.mse_loss(predictions, targets)  # Mean squared error: (1/n)∑(y_pred - y)²
-
-# For binary classification
-predictions = model(features)
-loss = F.binary_cross_entropy_with_logits(predictions, targets)
-```
-
-PyTorch includes most common loss functions, each implementing the mathematical formulations we covered in section 2.2. The loss value is a scalar tensor with gradient tracking enabled, forming the starting point for backpropagation.
-
-The backward pass computes gradients through automatic differentiation:
-
-```python
-# Forward pass
-predictions = model(features)
-loss = F.mse_loss(predictions, targets)
-
-# Backward pass
+# training loop:
+optimizer.zero_grad()
 loss.backward()
+optimizer.step()
 ```
 
-This single `backward()` call leverages the computational graph built during the forward pass to compute gradients using the chain rule. PyTorch automatically calculates ∂loss/∂w for every parameter w in the model - precisely what we need for the SGD update rule.
+`zero_grad()` clears old gradients. `backward()` computes new ones. `step()` reads `.grad` on each parameter and updates it according to the optimizer's rule. You can swap `SGD` for any other optimizer — nothing else in your code changes. Only the update rule inside `step()` changes.
 
-After backpropagation, gradients are stored in the `.grad` attribute of each parameter:
+### 1.3 Three categories
+
+There are a few different ways you can modify a training loop:
+
+1. **Algorithm modifiers.** Things you layer on top of any optimizer: gradient clipping, stepsize schedules, warmup, momentum.
+2. **Techniques that change the problem.** LoRA, quantization, weight decay. These modify what you're optimizing rather than how.
+3. **Different algorithms.** The PyTorch optimizers — different update rules for converting a gradient into a step.
+
+We'll go through each.
+
+## 2. Algorithm modifiers
+
+These are things you can layer on top of any optimizer.
+
+### 2.1 Gradient clipping
+
+We saw this briefly in the RL lecture. The key idea:
+
+1. Sometimes you get a really large gradient. This could be because you didn't fit some sample very well yet.
+2. If you see this, you don't want to have to adjust your stepsize or anything else. You just clip it.
+3. You do this after you form the minibatch gradient, not before.
+
+Mechanically: clip by global norm. If $\|g\| > c$, rescale
+
+$$
+g \leftarrow c \cdot \frac{g}{\|g\|}.
+$$
+
+Direction preserved, magnitude capped. In PyTorch:
 
 ```python
-# Access gradients
-for name, param in model.named_parameters():
-    print(f"Parameter: {name}, Shape: {param.shape}")
-    print(f"Gradient shape: {param.grad.shape}")
-    print(f"Gradient: {param.grad}")
+torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
 ```
 
-The forward and backward passes correspond directly to the two phases of our optimization algorithms:
-1. Forward pass: Compute model predictions and loss (evaluate objective function)
-2. Backward pass: Compute gradients (prepare for parameter updates)
+This goes between `backward()` and `step()`. A `max_norm` of 1.0 is reasonable. GPT-2 ([Radford et al., 2019](https://cdn.openai.com/better-language-models/language_models_are_unsupervised_multitask_learners.pdf){:target="_blank"}) and GPT-3 ([Brown et al., 2020](https://arxiv.org/abs/2005.14165){:target="_blank"}, Table 2.1) both use it.
 
-This separation cleanly maps to the mathematical formulation of gradient-based optimization while handling the complexities of automatic differentiation behind the scenes.
+### 2.2 Stepsize schedules
 
-The distinction between `nn.Module` subclasses (like `nn.Linear`) and functional interfaces (`F.linear`) is important. Module classes maintain parameters and state, while functional interfaces provide stateless operations. In practice, you'll typically define models using Module classes, then use functional interfaces for activation functions and loss computations.
+People almost never use a constant learning rate. Decaying it over training tends to give better results. One fact for SGD: with constant $\eta$, SGD converges to a neighborhood of the optimum whose radius is proportional to $\eta$. Shrinking $\eta$ shrinks the neighborhood. Beyond that, it's empirical.
 
-### 4.3 Optimizers and Updating Parameters
+**Warmup.** At first, gradients can be large, so take small steps. Then ramp up to a bigger learning rate for a while, then decay afterwards. Typical: linear warmup over 1–5% of total steps, then cosine decay. GPT-3 used 375 warmup steps, then cosine decay to 10% of peak.
 
-After defining our model and loss function, we need a mechanism to update parameters based on computed gradients. PyTorch's `torch.optim` module provides implementations of various optimization algorithms. The simplest approach uses the SGD optimizer:
+No built-in warmup in PyTorch. People do it manually:
 
 ```python
-import torch.optim as optim
+import math
 
-# Create optimizer by passing model parameters and learning rate
-optimizer = optim.SGD(model.parameters(), lr=0.01)
+def get_lr(step, warmup_steps, max_lr, total_steps):
+    if step < warmup_steps:
+        return max_lr * step / warmup_steps
+    progress = (step - warmup_steps) / (total_steps - warmup_steps)
+    return max_lr * 0.5 * (1 + math.cos(math.pi * progress))
 ```
 
-The `optimizer` object manages parameter updates based on the current values of their `.grad` attributes. Notice how little information the optimizer requires - just a reference to the model parameters and a learning rate. This works because all necessary gradient information is already stored in the `.grad` attributes of parameters after the backward pass.
+**Cosine annealing** is the dominant schedule for LLMs:
 
-With the optimizer defined, we can implement a complete training loop that performs gradient descent:
+$$
+\eta_k = \eta_{\min} + \frac{1}{2}(\eta_{\max} - \eta_{\min})\left(1 + \cos\!\left(\frac{\pi k}{T}\right)\right).
+$$
 
-```python
-for epoch in range(num_epochs):
-    for batch_features, batch_labels in dataloader:
-        # Zero gradients
-        optimizer.zero_grad()
-        
-        # Forward pass
-        outputs = model(batch_features)
-        loss = F.mse_loss(outputs, batch_labels)
-        
-        # Backward pass
-        loss.backward()
-        
-        # Update parameters
-        optimizer.step()
-        
-        print(f"Epoch {epoch}, Loss: {loss.item()}")
-```
+It's just a smooth decay from $\eta_{\max}$ to $\eta_{\min}$. Other options: step decay (drop by 10x at fixed epochs), linear decay, cosine with warm restarts.
 
-This training loop captures the essence of stochastic gradient descent. Let's examine each component in detail:
-
-The `optimizer.zero_grad()` call resets gradients to zero before each batch. This step is necessary because PyTorch accumulates gradients by default - without zeroing, each call to `backward()` would add to the existing gradients rather than replacing them. This accumulation feature is occasionally useful for complex architectures, but for standard SGD we typically want fresh gradients for each batch.
-
-During the forward pass, we compute model predictions and the corresponding loss value. This step builds a computational graph that tracks operations for automatic differentiation. The loss tensor becomes the starting point for gradient computation.
-
-The `loss.backward()` call initiates backpropagation through this computational graph. PyTorch automatically computes gradients for all parameters that require gradients and stores them in the `.grad` attribute of each parameter. This step implements the mathematical gradient $\nabla \ell(w, x_i, y_i)$ we've been discussing in our theoretical analysis.
-
-Finally, `optimizer.step()` applies the parameter updates according to the specific optimization algorithm. For vanilla SGD, this implements the update rule $w_{k+1} = w_k - \alpha \nabla L(w_k)$. The optimizer uses the stored gradients to update parameters in-place.
-
-This separation of gradient computation (`backward()`) from parameter updates (`step()`) is a key design choice in PyTorch. It offers flexibility to implement complex optimization strategies while keeping the basic training loop structure consistent.
-
-A common mistake is forgetting to call `zero_grad()` before `backward()`. Without this reset, gradients from multiple batches would accumulate, effectively increasing the batch size but in an uncontrolled way. This typically leads to erratic training behavior and poor convergence.
-
-We can inspect parameter values and their gradients at any point during training:
+In PyTorch, schedulers wrap an optimizer and adjust the learning rate each step:
 
 ```python
-for name, param in model.named_parameters():
-    print(f"Parameter {name}:")
-    print(f"  Value: {param.data}")
-    print(f"  Gradient: {param.grad}")
-    print(f"  Shape: {param.shape}")
-```
-
-The SGD optimizer supports several variations through additional parameters. For example, we can incorporate momentum by adding a single parameter:
-
-```python
-# SGD with momentum
-optimizer = optim.SGD(model.parameters(), lr=0.01, momentum=0.9)
-```
-
-This implementation corresponds directly to the momentum algorithm we analyzed in previous lectures. When momentum=0.9, the optimizer accumulates a running average of gradients with a decay factor of 0.9. Comparing with [Lecture 7](../7/notes.md), momentum is simply the $\beta$ parameter.
-
-Finally, we can add weight decay for L2 regularization:
-
-```python
-# SGD with weight decay
-optimizer = optim.SGD(model.parameters(), lr=0.01, weight_decay=1e-4)
-```
-
-This matches our earlier mathematical formulation where the gradient update includes an additional $\lambda w$ term. The implementation applies this regularization during the parameter update without modifying the stored gradients.
-
-
-### Learning Rate Schedulers
-
-Following our theoretical discussion of learning rate schedules in [the section on learning rate schedules](#learning-rate-schedules), PyTorch provides implementation tools through the `torch.optim.lr_scheduler` module. These schedulers dynamically adjust the learning rate during training, effectively transitioning from larger steps early in training to smaller steps later:
-
-```python
-from torch.optim.lr_scheduler import StepLR, ExponentialLR, CosineAnnealingLR
-
-# Create base optimizer first
-optimizer = optim.SGD(model.parameters(), lr=0.1)
-```
-
-PyTorch offers several scheduler implementations that correspond directly to the mathematical formulations we covered earlier. The `StepLR` scheduler implements the stepped decay we discussed, reducing the learning rate by a multiplicative factor at specified intervals:
-
-```python
-# Learning rate drops by factor of 0.1 every 30 epochs
-scheduler = StepLR(optimizer, step_size=30, gamma=0.1)
-```
-
-For exponential decay, the `ExponentialLR` scheduler multiplies the learning rate by a constant factor each epoch:
-
-```python
-# Learning rate decays by 5% each epoch
-scheduler = ExponentialLR(optimizer, gamma=0.95)
-```
-
-The cosine annealing schedule, which has shown strong empirical performance in recent research, can be implemented with `CosineAnnealingLR`:
-
-```python
-# Learning rate follows cosine curve from initial value to near-zero over 100 epochs
-scheduler = CosineAnnealingLR(optimizer, T_max=100)
-```
-
-The $1/t$ decay schedule we discussed in section 3.4 doesn't have a dedicated class in PyTorch, but we can easily implement it using the flexible `LambdaLR` scheduler. This scheduler accepts a function that computes the learning rate multiplier based on the epoch number:
-
-```python
-from torch.optim.lr_scheduler import LambdaLR
-
-# Implement 1/t decay schedule: lr = initial_lr / (1 + beta * epoch)
-beta = 0.01  # Controls decay speed
-scheduler = LambdaLR(optimizer, lr_lambda=lambda epoch: 1.0 / (1.0 + beta * epoch))
-```
-
-This implements the inverse time decay schedule we discussed in section 3.4, where the learning rate drops proportionally to 1/t. The `beta` parameter controls how quickly the learning rate declines - larger values cause faster decay. This scheduler has theoretical guarantees for convex problems, enabling convergence to the exact optimum at a rate of O(1/k).
-
-PyTorch also provides more sophisticated schedulers like `ReduceLROnPlateau`, which monitors a metric (typically validation loss, i.e., the value of the loss on a hold out sample) and reduces the learning rate when progress stalls:
-
-```python
-# Reduce learning rate when validation loss plateaus
-scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=10)
-```
-
-The `patience` parameter determines how many epochs with no improvement to wait before reducing the learning rate, making this scheduler adaptive to the optimization trajectory.
-
-To incorporate a scheduler into the training loop, you typically call its `step()` method once per epoch:
-
-```python
-for epoch in range(num_epochs):
-    # Training loop for one epoch
-    for batch_features, batch_labels in dataloader:
-        optimizer.zero_grad()
-        outputs = model(batch_features)
-        loss = F.mse_loss(outputs, batch_labels)
-        loss.backward()
-        optimizer.step()
-    
-    # Update learning rate after processing the entire epoch
-    scheduler.step()  # For most schedulers
-    
-    # For ReduceLROnPlateau, pass the quantity to monitor
-    # scheduler.step(validation_loss)
-    
-    # Track current learning rate
-    current_lr = scheduler.get_last_lr()[0]  # For most schedulers
-    # current_lr = optimizer.param_groups[0]['lr']  # Works for all schedulers
-    
-    print(f"Epoch {epoch}, Loss: {loss.item()}, LR: {current_lr}")
-```
-
-Pay attention to when `scheduler.step()` is called. For epoch-based schedulers like `StepLR`, it should happen once after processing all batches in an epoch. Calling it too frequently (e.g., after each batch) would cause the learning rate to decay much faster than intended.
-
-When using learning rate schedulers, there are some common pitfalls to avoid. First, don't forget to call `scheduler.step()` – a missing call means your learning rate never changes. Second, be careful about the initial learning rate; schedulers modify this value over time, but starting too high or too low can still derail training. Finally, remember that some schedulers (like `CosineAnnealingLR`) assume a fixed number of epochs, so if you stop training early or continue longer, the schedule might end prematurely or repeat.
-
-## Advanced Tweaks
-
-### Implementing EMA
-
-We've previously discussed how Exponential Moving Average (EMA) can reduce steady-state risk without sacrificing convergence rate. Let's implement this technique in PyTorch.
-
-The most straightforward approach is to maintain two copies of the model, the training model and an EMA version:
-
-```python
-import copy
-import torch
-
-# Create EMA model as a copy of the original
-ema_model = copy.deepcopy(model)
-
-# Disable gradient tracking for EMA parameters
-for param in ema_model.parameters():
-    param.requires_grad_(False)
-
-# Update function
-def update_ema(model, ema_model, decay=0.999):
-    with torch.no_grad():
-        for param, ema_param in zip(model.parameters(), ema_model.parameters()):
-            ema_param.data = decay * ema_param.data + (1 - decay) * param.data
-```
-
-The core of EMA is the update function, which blends the current EMA weights with the training model weights according to the decay factor. Higher decay values (closer to 1) make the EMA more stable but slower to adapt. Common values range from 0.9 to 0.9999, with 0.999 being a solid default.
-
-In the training loop, call the update function after each parameter update:
-
-```python
-for epoch in range(num_epochs):
-    for batch_features, batch_labels in dataloader:
-        # Regular SGD step
-        optimizer.zero_grad()
-        outputs = model(batch_features)
-        loss = F.mse_loss(outputs, batch_labels)
-        loss.backward()
-        optimizer.step()
-        
-        # Update EMA model
-        update_ema(model, ema_model)
-    
-    # Evaluate using EMA model
-    ema_model.eval()
-    with torch.no_grad():
-        val_outputs = ema_model(val_features)
-        val_loss = F.mse_loss(val_outputs, val_labels)
-```
-
-PyTorch also provides built-in utilities for parameter averaging through the `torch.optim.swa_utils` module. While originally designed for Stochastic Weight Averaging (SWA), this module works perfectly for EMA:
-
-```python
-from torch.optim.swa_utils import AveragedModel
-
-# Create averaged model with decay factor
-ema_model = AveragedModel(model, avg_fn=lambda avg_param, param, num_averaged:
-                          0.999 * avg_param + (1 - 0.999) * param)
-
-# Training loop
-for epoch in range(num_epochs):
-    for batch_features, batch_labels in dataloader:
-        # Regular training step
-        optimizer.zero_grad()
-        outputs = model(batch_features)
-        loss = F.mse_loss(outputs, batch_labels)
-        loss.backward()
-        optimizer.step()
-        
-        # Update EMA model 
-        ema_model.update_parameters(model)
-```
-
-The `avg_fn` parameter defines our exponential moving average formula. If omitted, it defaults to straight averaging, which isn't what we want for EMA.
-
-Evaluating models trained with EMA consistently shows improved performance, especially on test data. The smoothed parameter trajectory reduces overfitting to mini-batch noise, resulting in more robust models. This effect is most pronounced with small batch sizes, where gradient noise is highest.
-
-Remember to always evaluate and save the EMA model for deployment, not the training model. The additional memory cost of maintaining two models is typically negligible compared to the performance gains, especially during inference when we only need the EMA version.
-
-
-### Mixing Techniques
-
-Each optimization technique we've discussed addresses specific challenges in the training process. Momentum accelerates convergence in poorly conditioned dimensions, weight decay provides regularization, learning rate schedules manage the convergence-precision tradeoff, and EMA stabilizes parameter trajectories. While combining these methods can yield powerful results, their interactions require careful consideration.
-
-Implementing techniques incrementally helps clearly assess each component's contribution. Consider the following progressive implementation strategy:
-
-```python
-# Start with basic SGD
-optimizer = optim.SGD(model.parameters(), lr=0.1)
-
-# Later, add momentum to accelerate convergence
-optimizer = optim.SGD(model.parameters(), lr=0.1, momentum=0.9)
-
-# Add weight decay for regularization
-optimizer = optim.SGD(model.parameters(), lr=0.1, momentum=0.9, weight_decay=1e-4)
-
-# Incorporate a learning rate schedule
-scheduler = CosineAnnealingLR(optimizer, T_max=100)
-# Call scheduler.step() after each epoch
-
-# Finally, implement EMA for parameter smoothing
-ema_model = AveragedModel(model, avg_fn=lambda avg, param, _: 0.999 * avg + 0.001 * param)
-# Update after each optimization step with: ema_model.update_parameters(model)
-```
-
-The integration of these components should be validated at each stage. When a technique fails to improve performance, revisit hyperparameter choices before proceeding further. For instance, if momentum seems ineffective, try different values (0.8-0.99) before concluding it's unsuitable for your problem.
-
-Certain combinations are especially effective in specific contexts. For large-batch training, momentum and learning rate scheduling typically provide the greatest benefits. For small-batch regimes, EMA becomes increasingly valuable as it directly addresses gradient noise issues.
-
-Remember that interactions between techniques may require hyperparameter adjustments. Adding momentum often necessitates reducing the learning rate, while implementing weight decay might require recalibration when used alongside momentum. These cascading adjustments underscore why incremental implementation and validation are crucial.
-
-## Minimal Working Implementation
-
-The following example trains a linear regression on synthetic data, combining momentum, weight decay, EMA, and a cosine-annealing schedule. You can test out the code in the [notebook](https://colab.research.google.com/github/damek/STAT-4830/blob/main/section/8/notebook.ipynb).
-
-```python
-import torch
-import torch.nn as nn
-import torch.optim as optim
-from torch.utils.data import Dataset, DataLoader, TensorDataset
-from torch.optim.lr_scheduler import CosineAnnealingLR
-from torch.optim.swa_utils import AveragedModel
-import matplotlib.pyplot as plt
-import numpy as np
-
-# set random seed for reproducibility
-torch.manual_seed(42)
-np.random.seed(42)
-
-# 1. create synthetic dataset
-def generate_data(n=1000, d=5, noise=0.5):
-    # true weights and bias
-    w_true = torch.randn(d, 1)
-    b_true = torch.randn(1)
-    
-    # input features
-    X = torch.randn(n, d)
-    
-    # target values with noise
-    y = X @ w_true + b_true*torch.ones(n, 1) + noise * torch.randn(n, 1)
-    
-    return X, y, w_true, b_true
-
-X, y, w_true, b_true = generate_data()
-
-# split into train/val sets
-train_size = int(0.8 * len(X))
-X_train, y_train = X[:train_size], y[:train_size]
-X_val, y_val = X[train_size:], y[train_size:]
-
-# create data loaders
-train_dataset = TensorDataset(X_train, y_train)
-val_dataset = TensorDataset(X_val, y_val)
-
-train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
-val_loader = DataLoader(val_dataset, batch_size=64)
-
-# 2. define model
-class LinearModel(nn.Module):
-    def __init__(self, input_dim):
-        super().__init__()
-        self.linear = nn.Linear(input_dim, 1)
-    
-    def forward(self, x):
-        return self.linear(x)
-
-model = LinearModel(X.shape[1])
-
-# 3. set up optimizer with momentum and weight decay
-optimizer = optim.SGD(
-    model.parameters(),
-    lr=0.1,           # initial learning rate
-    momentum=0.9,     # momentum coefficient
-    weight_decay=1e-4 # L2 regularization
-)
-
-# 4. learning rate scheduler
-scheduler = CosineAnnealingLR(optimizer, T_max=50, eta_min=0.001)
-
-# 5. EMA model
-ema_model = AveragedModel(model, avg_fn=lambda avg, param, _: 0.99 * avg + 0.01 * param)
-
-# 6. train function
-def train_epoch(model, ema_model, train_loader, optimizer, criterion):
-    model.train()
-    train_loss = 0.0
-    
-    for X_batch, y_batch in train_loader:
-        # zero gradients
-        optimizer.zero_grad()
-        
-        # forward pass
-        outputs = model(X_batch)
-        loss = criterion(outputs, y_batch)
-        
-        # backward pass and optimize
-        loss.backward()
-        optimizer.step()
-        
-        # update EMA model
-        ema_model.update_parameters(model)
-        
-        train_loss += loss.item() * X_batch.size(0)
-    
-    return train_loss / len(train_loader.dataset)
-
-# 7. validation function
-def validate(model, val_loader, criterion):
-    model.eval()
-    val_loss = 0.0
-    
-    with torch.no_grad():
-        for X_batch, y_batch in val_loader:
-            outputs = model(X_batch)
-            loss = criterion(outputs, y_batch)
-            val_loss += loss.item() * X_batch.size(0)
-    
-    return val_loss / len(val_loader.dataset)
-
-# 8. training loop
-criterion = nn.MSELoss()
-num_epochs = 50
-
-# tracking metrics
-train_losses = []
-val_losses = []
-val_losses_ema = []
-learning_rates = []
-
-# training
-for epoch in range(num_epochs):
-    # train for one epoch
-    train_loss = train_epoch(model, ema_model, train_loader, optimizer, criterion)
-    
-    # validate standard model
-    val_loss = validate(model, val_loader, criterion)
-    
-    # validate EMA model
-    val_loss_ema = validate(ema_model.module, val_loader, criterion)
-    
-    # update learning rate
+optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=1000)
+
+for step in range(1000):
+    optimizer.zero_grad()
+    loss.backward()
+    optimizer.step()
     scheduler.step()
-    current_lr = scheduler.get_last_lr()[0]
-    
-    # store metrics
-    train_losses.append(train_loss)
-    val_losses.append(val_loss)
-    val_losses_ema.append(val_loss_ema)
-    learning_rates.append(current_lr)
-    
-    # display progress
-    if (epoch+1) % 5 == 0:
-        print(f"Epoch {epoch+1}/{num_epochs}, LR: {current_lr:.4f}")
-        print(f"  Train Loss: {train_loss:.6f}")
-        print(f"  Val Loss: {val_loss:.6f}")
-        print(f"  EMA Val Loss: {val_loss_ema:.6f}")
-
-# 9. plot results
-plt.figure(figsize=(12, 8))
-
-plt.subplot(2, 1, 1)
-plt.plot(range(num_epochs), train_losses, label='Train Loss')
-plt.plot(range(num_epochs), val_losses, label='Val Loss')
-plt.plot(range(num_epochs), val_losses_ema, label='EMA Val Loss')
-plt.xlabel('Epoch')
-plt.ylabel('Loss')
-plt.legend()
-plt.title('Training and Validation Loss')
-
-plt.subplot(2, 1, 2)
-plt.plot(range(num_epochs), learning_rates)
-plt.xlabel('Epoch')
-plt.ylabel('Learning Rate')
-plt.title('Learning Rate Schedule')
-
-plt.tight_layout()
-plt.show()
-
-# 10. compare final weights to true weights
-with torch.no_grad():
-    print("\nTrue weights vs. Learned weights:")
-    for i, (true, learned, ema_learned) in enumerate(zip(
-            w_true, model.linear.weight[0], ema_model.module.linear.weight[0])):
-        print(f"  w{i}: True={true.item():.4f}, Model={learned.item():.4f}, EMA={ema_learned.item():.4f}")
-    
-    print(f"  bias: True={b_true.item():.4f}, "
-          f"Model={model.linear.bias.item():.4f}, "
-          f"EMA={ema_model.module.linear.bias.item():.4f}")
 ```
-Here is a graph generated by the above code:
 
-![MWE](figures/mwe.png)
+Call `scheduler.step()` after `optimizer.step()`. There's also `LambdaLR` if you want a custom schedule like the warmup function above:
 
-The graph shows three key trends. The EMA model (green line) stabilizes quickly and maintains consistent validation loss. The standard model (orange line) exhibits more oscillation throughout training. The learning rate follows a cosine curve from 0.1 to 0.001 over 50 epochs.
+```python
+scheduler = torch.optim.lr_scheduler.LambdaLR(
+    optimizer, lr_lambda=lambda step: get_lr(step, warmup_steps, max_lr, total_steps) / max_lr
+)
+```
 
-By epoch 15, the EMA model reaches a validation loss of and standard validation losses reach similar validation losses. The standard model continues to fluctuate until later epochs. Terminal output confirms both models eventually recover the true weights with similar accuracy. The true value for $w_4$ (-1.1229) matches closely with both model estimates (-1.1252 and -1.1260).
+![Learning rate schedules](figures/lr_schedules.png)
 
-This implementation demonstrates how the various optimization components function together in a complete training loop.
+*Figure 2.1: Four learning rate schedules over 90,000 steps, all starting from $\eta = 0.1$. Warmup + cosine is by far the most common in modern LLM training.*
+
+### 2.3 Momentum
+
+Look at the function $f(x,y) = x^2 + y^4$. This has what's called a **ravine** structure — the $x$-axis (where $y \approx 0$) is a region you're drawn toward, and once you're near it, progress along it is slow.
+
+The momentum update adds inertia: each step carries some fraction of the previous step's displacement.
+
+$$
+\theta_{k+1} = \theta_k - \eta \nabla f(\theta_k) + \beta(\theta_k - \theta_{k-1}).
+$$
+
+This is Polyak's heavy ball method. The term $\beta(\theta_k - \theta_{k-1})$ says: keep going in the direction you were already going, scaled by $\beta$. Typical: $\beta = 0.9$.
+
+You will also see an equivalent formulation using a velocity buffer:
+
+$$
+v_{k+1} = \mu \, v_k + g_k, \qquad \theta_{k+1} = \theta_k - \eta \, v_{k+1}.
+$$
+
+These produce identical iterates when $\beta = \mu$. To see why: define $d_k = \theta_k - \theta_{k-1}$. In the velocity formulation, $d_{k+1} = -\eta(\mu v_k + g_k) = \mu(-\eta v_k) - \eta g_k = \mu \, d_k - \eta g_k$, which matches Polyak. PyTorch uses the velocity form: `torch.optim.SGD(params, lr=0.01, momentum=0.9)`.
+
+Why does this help on the ravine? Near the ravine floor ($y \approx 0$), the gradient points almost entirely in the $y$-direction (normal to the ravine) with very little $x$-component (tangent to the ravine). So each GD step mostly moves in $y$ and barely moves in $x$. But momentum accumulates those small tangent components across steps. The $x$-velocity builds up, pushing you along the ravine.
+More precisely: if the gradient is constant $g$ every step, the velocity converges to $g/(1-\mu)$. With $\mu = 0.9$ the effective step is $10\eta$. If the gradient alternates between $+g$ and $-g$, the velocity stays near zero. So momentum amplifies consistent directions and damps oscillating ones.
+
+There's also Nesterov momentum (`nesterov=True`), which evaluates the gradient at a lookahead point. The practical difference for neural networks is small.
+
+![GD vs momentum on ravine](figures/momentum_ravine.png)
+
+*Figure 2.2: Gradient descent (red) vs. gradient descent with momentum (blue) on $f(x,y) = x^2 + y^4$, starting from $(3, 2)$. Left: full view. Right: zoomed in near the origin. GD crawls along the ravine (the $x$-axis), making very slow tangent progress; momentum accumulates tangent velocity and reaches the origin faster, at the cost of overshooting in $y$.*
+
+The animated version below continuously zooms in so you can see both methods evolve:
+
+![Momentum ravine animation](figures/momentum_ravine.gif)
+
+## 3. Techniques that change the problem
+
+These modify what you're optimizing, not how.
+
+### 3.1 LoRA (Low-Rank Adaptation)
+
+Let's say you're optimizing a function where the parameters are matrices. The model has already been trained — say, a transformer. The base model is already pretty good. Now we have some more data and we want to fine-tune, but not too much.
+
+Simplest solution: instead of optimizing $L(W)$ directly on the new data, define
+
+$$
+f(A, B) = L(W + AB^T)
+$$
+
+and optimize this instead, where $A \in \mathbb{R}^{d \times r}$ and $B \in \mathbb{R}^{d \times r}$ are skinny and tall, with $r \ll d$.
+
+![LoRA matrix dimensions](figures/lora_matrices.png)
+
+*Figure 3.1: LoRA parameterization. $W$ is the frozen $d \times d$ pretrained weight matrix. The update $AB^T$ is a $d \times d$ matrix but is parameterized by only $2dr$ numbers instead of $d^2$.*
+
+This has way fewer parameters. Per layer: $d^2 \to 2dr$. For $d = 4096$, $r = 16$: 16.8M parameters becomes 131K. That's a 128x reduction. The inner dimension $r$ is called the **rank**. People call this **LoRA** — low rank adapters (Hu et al., 2021).
+
+You initialize $B = 0$ and $A$ as a random Gaussian, so $AB^T = 0$ at the start — fine-tuning begins as the pretrained model. After training, you merge: $W_{\text{new}} = W + AB^T$, so there is no additional cost at inference.
+
+In practice, you apply LoRA to the attention matrices ($W_Q, W_K, W_V, W_O$) and sometimes the MLP matrices. Setting $r = 8$ or $r = 16$ typically recovers close to full fine-tuning performance with less than 1% of the parameters. This is what made the open-source fine-tuning boom of 2023–2025 possible. People with a single 24GB GPU could fine-tune 7B-parameter models.
+
+**QLoRA** (Dettmers et al., 2023) is the same idea, but you store $W$ in 4-bit precision. This lets you fine-tune 65B models on a single 48GB GPU.
+
+### 3.2 Quantization
+
+The idea here is to train in lower precision datatypes. Operations are faster, but training can become unstable, and not every parameter should be stored in the same precision.
+
+For example, in **mixed-precision training** (which is basically universal now on modern GPUs), you do the forward and backward passes in FP16 or BF16 (16-bit floating point), but you keep the optimizer's internal state in FP32. (We haven't discussed Adam yet, but most optimizers maintain auxiliary buffers — running averages, squared gradients, etc. — that need to stay in high precision. We'll see what those are in Section 4.) The reason is that gradient updates can be very small, and if you accumulate them in 16-bit you lose information.
+
+QLoRA takes this further: you freeze the base weights in 4-bit (NF4) precision, keep the LoRA adapters in BF16, and keep the optimizer states in FP32. That's three different precisions for three different roles.
+
+### 3.3 Weight decay
+
+This one is a bit weird. There is a technique called ridge regularization. You may have seen it in least squares with a ridge penalty. You add an L2 norm to the objective:
+
+$$
+\text{minimize} \quad L(\theta) + \frac{\lambda}{2}\|\theta\|^2.
+$$
+
+This biases solutions toward small weights, which may help with generalization.
+
+Now some people noticed there is another way to do weight decay that is a bit nicer. Suppose you have an optimizer that takes a step $\theta_+ = \theta - G$, where $G$ is some update direction (could be the gradient, could be something fancier). **Weight decay** modifies this to:
+
+$$
+\theta_+ = (1-\lambda)\theta - G.
+$$
+
+When $G$ is the stochastic gradient of SGD, this is just L2 regularization. You can check: the gradient of $L(\theta) + \frac{\lambda}{2}\|\theta\|^2$ is $\nabla L(\theta) + \lambda\theta$, so the SGD step is $\theta - \eta(\nabla L + \lambda\theta) = (1 - \eta\lambda)\theta - \eta\nabla L$. Same thing.
+
+But in other algorithms — specifically the adaptive ones we'll see in Section 4 — it is not the same as L2 regularization, because those algorithms rescale the gradient before applying the update. Adding $\lambda\theta$ to the gradient *before* that rescaling changes the effect. Decoupled weight decay applies the shrinkage *after* the optimizer step, so the regularization is independent of the learning rate. We don't really know why this helps, but empirically it does. We'll revisit this distinction when we get to AdamW in Section 4.5.
+
+Either way, the net effect is the same: shrink the parameters and maybe generalize better. People use it.
+
+Practical note: you typically apply weight decay to weight matrices only, not to biases or normalization parameters. All the modern PyTorch optimizers have a `weight_decay` option. For SGD it looks like this:
+
+```python
+optimizer = torch.optim.SGD(model.parameters(), lr=0.01, weight_decay=0.01)
+```
+
+If you want different weight decay for different parameters (e.g., decay on weights but not on biases), you pass parameter groups:
+
+```python
+decay_params = [p for n, p in model.named_parameters()
+                if 'bias' not in n and 'norm' not in n]
+no_decay_params = [p for n, p in model.named_parameters()
+                   if 'bias' in n or 'norm' in n]
+optimizer = torch.optim.SGD([
+    {'params': decay_params, 'weight_decay': 0.01},
+    {'params': no_decay_params, 'weight_decay': 0.0}
+], lr=0.01)
+```
+
+## 4. Different algorithms
+
+All first-order algorithms work in a similar way:
+
+1. Compute a stochastic gradient $g_k$ (e.g., with a minibatch estimator).
+2. Convert that into a search direction $G$.
+
+The interesting part is step 2. You can add momentum, weight decay, etc. And you can **scale the components** of $G$ in various ways.
+
+### 4.1 SignSGD
+
+The simplest thing you can do is throw away the gradient magnitude entirely and only use the sign of each coordinate:
+
+$$
+\theta_{+,j} = \theta_j - \eta \cdot \text{sign}(g_j).
+$$
+
+Every coordinate gets the same step size $\eta$. You move in the direction the gradient points, but you ignore how large it is.
+
+There is a variant called **Signum**, which is SignSGD with momentum. You compute $m_{k+1} = \beta m_k + (1-\beta)g_k$ and then update in the direction $\text{sign}(m_{k+1})$.
+
+We will come back to SignSGD after we introduce Adam in Section 4.4 — it turns out the two are closely related.
+
+### 4.2 AdaGrad
+
+AdaGrad (Duchi, Hazan, Singer, 2011) maintains a per-coordinate adaptive learning rate by accumulating squared gradients:
+
+$$
+s_{k+1,j} = s_{k,j} + g_{k,j}^2, \qquad \theta_{+,j} = \theta_j - \frac{\eta}{\sqrt{s_{k+1,j}} + \epsilon} \, g_j.
+$$
+
+The effective learning rate for coordinate $j$ at step $k$ is $\eta / (\sqrt{s_{k,j}} + \epsilon)$. Coordinates with historically large gradients accumulate a large $s_j$, so their learning rate shrinks. Coordinates with small gradients keep a small $s_j$, so their learning rate stays large.
+
+This is useful when gradients are **sparse** — meaning that on any given step, most coordinates of $g$ are zero and only a few are nonzero. This happens in classical NLP with one-hot word embeddings: each training example only touches the embedding vector for the words it contains, so the gradient is zero for all the other embedding vectors. Rare words get updated infrequently, and AdaGrad ensures that when they do get updated, the learning rate is still large. Frequent words accumulate a large $s_j$ and their learning rate decays automatically.
+
+AdaGrad was quite popular when people were doing convex optimization and classical machine learning with sparse features. These days it is not used much, because the problem is that $s$ only grows and the learning rate can only shrink. For the long training runs typical of modern deep learning, the learning rate eventually becomes too small to make progress.
+
+In PyTorch: `torch.optim.Adagrad(params, lr=0.01)`.
+
+### 4.3 RMSProp
+
+RMSProp (Hinton, unpublished Coursera slides, 2012) fixes AdaGrad's accumulator by using an exponential moving average instead of a sum, so that $v$ can go up and down:
+
+$$
+v_{k+1,j} = \beta \, v_{k,j} + (1-\beta) \, g_{k,j}^2, \qquad \theta_{+,j} = \theta_j - \frac{\eta}{\sqrt{v_{k+1,j}} + \epsilon} \, g_j.
+$$
+
+A typical value is $\beta = 0.99$. This was never published as a paper. In PyTorch: `torch.optim.RMSprop(params, lr=0.01, alpha=0.99)` (PyTorch calls $\beta$ `alpha`).
+
+### 4.4 Adam
+
+Adam (Kingma and Ba, 2014) combines momentum (a first moment estimate) with RMSProp (a second moment estimate):
+
+$$
+m_{k+1} = \beta_1 m_k + (1-\beta_1) g_k \qquad \text{(momentum)}
+$$
+
+$$
+v_{k+1} = \beta_2 v_k + (1-\beta_2) g_k^2 \qquad \text{(per-coordinate scaling)}
+$$
+
+Both buffers start at zero, so they are biased toward zero in early steps. To correct for this, Adam divides by a bias correction term:
+
+$$
+\hat{m}_{k+1} = \frac{m_{k+1}}{1 - \beta_1^{k+1}}, \qquad \hat{v}_{k+1} = \frac{v_{k+1}}{1 - \beta_2^{k+1}}.
+$$
+
+The update is then:
+
+$$
+\theta_+ = \theta - \frac{\eta}{\sqrt{\hat{v}_{k+1}} + \epsilon} \, \hat{m}_{k+1}.
+$$
+
+The default values are $\beta_1 = 0.9$, $\beta_2 = 0.999$, $\epsilon = 10^{-8}$, and $\eta = 10^{-3}$.
+
+```python
+torch.optim.Adam(params, lr=1e-3, betas=(0.9, 0.999), eps=1e-8)
+```
+
+### 4.5 AdamW
+
+AdamW (Loshchilov and Hutter, 2019) is Adam with the decoupled weight decay we discussed in Section 3.3. When people say "Adam" in 2025 they usually mean AdamW.
+
+```python
+torch.optim.AdamW(params, lr=1e-3, weight_decay=0.01)
+```
+
+### 4.6 Connection to SignSGD
+
+Now that we've seen Adam, recall SignSGD from Section 4.1. Adam's update for coordinate $j$ is:
+
+$$
+\theta_{+,j} = \theta_j - \frac{\eta}{\sqrt{\hat{v}_j} + \epsilon} \, \hat{m}_j.
+$$
+
+The ratio $\hat{m}_j / \sqrt{\hat{v}_j}$ controls the effective direction. Now, $\hat{m}_j$ is an exponential moving average of $g_j$, and $\hat{v}_j$ is an exponential moving average of $g_j^2$. If the gradient for coordinate $j$ doesn't change sign too often, then $\hat{v}_j \approx \hat{m}_j^2$, and so:
+
+$$
+\frac{\hat{m}_j}{\sqrt{\hat{v}_j}} \approx \frac{\hat{m}_j}{\lvert\hat{m}_j\rvert} = \text{sign}(\hat{m}_j).
+$$
+
+In other words, Adam's update is approximately $\theta_{+,j} \approx \theta_j - \eta \cdot \text{sign}(\hat{m}_j)$, which is exactly Signum. The adaptive scaling in the denominator mostly just normalizes each coordinate to $\pm 1$.
+
+Orvieto and Gower ([arXiv:2505.21829](https://arxiv.org/abs/2505.21829){:target="_blank"}, 2025) made this precise: they trained over 1,500 language models and found that Signum (SignSGD with momentum) closes ~96% of the gap between SGD and Adam. Most of what Adam does, it turns out, is take the sign.
+
+## 5. Why coordinate-wise scaling
+
+Why might you want to scale the components of the gradient in funny ways? Let's go back to our ravine example from Section 2.3.
+
+### 5.1 The axis-aligned case
+
+Consider $f(x,y) = x^2 + y^4$. Imagine we run gradient descent with a constant stepsize. We converge very, very slowly. Let's think about why.
+
+The gradient descent recursion on each variable separately is:
+
+$$
+x_+ = x - \gamma \cdot 2x, \qquad y_+ = y - \gamma \cdot 4y^3.
+$$
+
+Now if we choose $\gamma$ differently for each coordinate:
+
+- For $x$: set $\gamma_x = 1/2$. Then $x_+ = x - 2x/2 = 0$. Converges in 1 step.
+- For $y$: set $\gamma_y = 1/(4y^2)$. Then $y_+ = y - 4y^3/(4y^2) = y - y = 0$. Converges in 1 step.
+
+Each coordinate needs a **different stepsize** to converge quickly. This is why coordinate-wise rescaling has taken off: this type of scaling can be beneficial when there isn't a significant coupling between the coordinates (but there can still be a nonzero coupling).
+
+Let's compare a few approaches on this function, all starting from $(3, 3)$:
+
+1. **GD with constant stepsize** $\eta = 0.005$. This is vanilla gradient descent: $\theta_+ = \theta - \eta \nabla f(\theta)$. The stepsize has to be tiny to avoid blowup in the $y$ direction, so the $x$ coordinate barely moves.
+2. **Per-coordinate stepsizes.** We set $\eta_x = 0.4$ (aggressive, since the $x$ direction is quadratic) and $\eta_y = \min(0.2 / (4y^2 + \epsilon),\; 0.1)$, which approximates the ideal $1/(4y^2)$ from above but clamps it to avoid giant jumps when $y$ is near zero. The update is $x_+ = x - \eta_x \cdot 2x$, $y_+ = y - \eta_y \cdot 4y^3$.
+3. **SignSGD** with $\eta = 0.03$. The update is $\theta_+ = \theta - \eta \cdot \text{sign}(\nabla f(\theta))$. Every coordinate moves by exactly $\pm\eta$ per step, regardless of gradient magnitude. This automatically treats both coordinates equally.
+4. **Adam** with $\eta = 0.5$, $\beta_1 = 0.9$, $\beta_2 = 0.999$. Adam adapts the stepsize per-coordinate using exponential moving averages of the gradient and its square, as we discussed in Section 4.5.
+
+![Coordinate scaling comparison](figures/coordinate_scaling.png)
+
+*Figure 5.1: Four trajectories on $f(x,y) = x^2 + y^4$ from $(3, 3)$. GD with constant $\eta$ (red) barely moves. Per-coordinate $\eta$ (green) converges quickly by matching each direction's curvature. SignSGD (orange) ignores gradient magnitude entirely and makes steady equal-sized progress per coordinate. Adam (blue) achieves a similar effect adaptively.*
+
+![Coordinate scaling animation](figures/coordinate_scaling.gif)
+
+*Figure 5.2: Animated version of Figure 5.1, continuously zooming toward the origin. SignSGD's equal-step behavior and Adam's adaptive scaling both outperform constant-stepsize GD dramatically.*
+
+There is a catch with SignSGD. Every update moves each coordinate by exactly $\pm\eta$, regardless of how close you are to the minimizer. When $\theta$ is far from zero, that's fine — you're making progress. But once you get close, you're trapped: you keep bouncing back and forth across the minimizer in steps of size $\eta$, and you can never get closer than $\eta$ in any coordinate. The method will oscillate forever.
+
+The fix is to decay the stepsize, and the natural choice is **geometric decay**:
+
+$$
+\eta_k = \eta_0 \cdot \rho^k, \qquad \rho \in (0, 1).
+$$
+
+Why geometric? Think about it: if SignSGD is making progress, the distance to the minimizer is shrinking roughly by a constant factor each step. The stepsize should shrink at the same rate, so that the step remains proportional to the remaining distance. Geometric decay does exactly that. The total displacement in any one coordinate is $\sum_{k=0}^{\infty} \eta_0 \rho^k = \eta_0 / (1 - \rho)$, which is finite — so the method converges, and the oscillation radius at step $k$ is bounded by $\eta_k = \eta_0 \rho^k$, which goes to zero.
+
+![SignSGD decay comparison](figures/signsgd_decay.png)
+
+*Figure 5.3: SignSGD with constant $\eta = 0.1$ (orange) vs geometrically decayed $\eta_k = 0.1 \cdot 0.98^k$ (blue). Left: full trajectories. Center: zoomed near origin — the constant version fills a band it can never escape, while the decayed version zigzags with shrinking amplitude. Right: distance to minimizer on a log scale. Constant $\eta$ plateaus; geometric decay decreases at a roughly linear rate on the log scale, i.e., geometrically.*
+
+![SignSGD decay animation](figures/signsgd_decay.gif)
+
+*Figure 5.4: Animated zoom of Figure 5.3. As the camera closes in, the constant-$\eta$ trajectory fills a visible region, while the geometrically decayed version converges.*
+
+This is not specific to SignSGD. Any method that takes fixed-magnitude steps — including Signum — needs a decaying schedule to converge.
+
+### 5.2 Adam and axis alignment
+
+Out of all these modifications, Adam has withstood the test of time for deep learning optimization. There is no real theory for it. The best explanation I can think of is that deep learning problems are "somewhat axis aligned": the weight matrices in a network have a natural coordinate system (the entries of the matrix), and the loss function doesn't couple those entries too aggressively, so per-coordinate scaling gets you most of the way.
+
+## 6. Newton's method
+
+What if the function is NOT axis-aligned? Consider $f(x,y) = (x-y)^2 + (x+y)^4$. The $x$ and $y$ coordinates are coupled. Per-coordinate scaling in the $(x,y)$ basis won't help.
+
+But notice: if we change variables to $u = x+y$, $w = x-y$, then $f = w^2 + u^4$. That's the same ravine function from before, in rotated coordinates! We already know how to optimize that — use different stepsizes for each coordinate. The problem is just that we're working in the wrong coordinate system.
+
+So the question is: how do we find the right coordinates? We need a matrix $A$ such that if we replace the gradient step $\theta_+ = \theta - \eta \nabla f$ with $\theta_+ = \theta - \eta A \nabla f$, the matrix $A$ rotates us into the decoupled basis and rescales each direction appropriately.
+
+### 6.1 The Hessian diagonalizes the problem
+
+It turns out the Hessian $H = \nabla^2 f$ gives us exactly this. Its eigenvectors are the "right axes" for the function, and its eigenvalues tell us how curved the function is along each axis. Multiplying by $H^{-1}$ rotates into the eigenvector basis and rescales each direction by the inverse curvature — which is precisely the per-coordinate scaling idea, but in the correct coordinate system. Let's work it out.
+
+The gradient in $(x,y)$ coordinates:
+
+$$
+\nabla_x f = 2(x-y) + 4(x+y)^3, \qquad \nabla_y f = -2(x-y) + 4(x+y)^3.
+$$
+
+The Hessian:
+
+$$
+H = \begin{bmatrix} 2 + 12(x+y)^2 & -2 + 12(x+y)^2 \\ -2 + 12(x+y)^2 & 2 + 12(x+y)^2 \end{bmatrix}.
+$$
+
+Diagonalize: the eigenvectors of $H$ are $(1,1)/\sqrt{2}$ and $(1,-1)/\sqrt{2}$. These are exactly the directions $u = x+y$ and $w = x-y$. The eigenvalues are $24(x+y)^2$ (in the $u$ direction) and $4$ (in the $w$ direction). So in the eigenvector basis, $H = \text{diag}(24u^2, 4)$.
+
+### 6.2 The Newton step
+
+The gradient in $(u,w)$ coordinates is $(4u^3, 2w)$. The Newton step is:
+
+$$
+H^{-1} \nabla f = \left(\frac{4u^3}{12u^2}, \frac{2w}{2}\right) = \left(\frac{u}{3}, w\right).
+$$
+
+So Newton takes the step $-(u/3, w)$. The $w$ coordinate converges in 1 step (since $f$ is quadratic in $w$). The $u$ coordinate converges cubically fast. Newton's method rotates the axes so the function looks like $x^2 + y^4$ in the rotated basis, then rescales each coordinate.
+
+![Newton's method on coupled function](figures/newton_ravine.png)
+
+*Figure 6.1: Three trajectories on $f(x,y) = (x-y)^2 + (x+y)^4$ from $(3, 1)$. Left: full view — GD (red) crawls along the ravine, per-coordinate $\eta$ (orange) does only slightly better because the coordinates are coupled, Newton (green) converges in ~30 steps. Center: zoomed near origin. Right: distance to minimizer on a log scale — Newton drops orders of magnitude faster than either first-order method. Arrows show the Hessian eigenvectors at the starting point.*
+
+![Newton's method animation](figures/newton_ravine.gif)
+
+*Figure 6.2: Animated zoom. Newton (green) has already converged before GD (red) and per-coordinate GD (orange) make it halfway down the ravine.*
+
+### 6.3 The catch
+
+This is called **Newton's method**. You may remember Newton's method from single-variable calculus as a root-finding algorithm: to find a root of $g(x) = 0$, you iterate $x_+ = x - g(x)/g'(x)$. Here we're doing the same thing, but applied to the gradient $\nabla f(\theta) = 0$ — we want to find the point where the gradient vanishes. The single-variable update $x - g/g'$ becomes $\theta - (\nabla^2 f)^{-1} \nabla f$, where the Hessian $\nabla^2 f$ plays the role of the derivative of the gradient.
+
+Key issue: it's not implementable in high dimensions. It requires computing the Hessian — an $n \times n$ matrix where $n$ is the number of parameters — and then solving a linear system. For a model with a billion parameters, that's a $10^9 \times 10^9$ matrix. Not happening.
+
+## 7. Beyond Adam: Muon
+
+### 7.1 The modded-nanogpt competition
+
+Adam was the state of the art until recently. But this is starting to change.
+
+What happened is that an independent researcher named Keller Jordan released a benchmark called **modded-nanogpt** that led to the popularization of an algorithm called **Muon**. A bit of backstory.
+
+Andrej Karpathy released the [nanoGPT](https://github.com/karpathy/nanoGPT){:target="_blank"} repo years ago. It shows you how to train a transformer with very minimal code on Shakespeare data (the same data we used in Lecture 5). They also trained on [FineWeb](https://huggingface.co/datasets/HuggingFaceFW/fineweb){:target="_blank"} data, a large-scale web text dataset released by HuggingFace containing ~15 trillion tokens of cleaned web text. The modded-nanogpt competition uses a subset called FineWeb-Edu, filtered for educational content.
+
+This was a nice teaching repo but it wasn't optimized. Karpathy later wrote a version called [LLM.c](https://github.com/karpathy/llm.c){:target="_blank"} which was more optimized but took about 45 minutes to train on FineWeb.
+
+So Keller noticed this and created a competition to "speedrun" training as quickly as possible. His first edits tuned hyperparameters. The second implemented an optimizer he called Muon, done in collaboration with Jeremy Bernstein (now at Thinking Machines). At that point the training time had dropped from 45 minutes to 24.9 minutes. But the competition has continued, and the latest training time is only ~1.4 minutes, due to improvements in the Muon optimizer, architectural changes, and other tricks. From what I understand, improvements from this repo actually appear to generalize to larger-scale models, which is pretty cool.
+
+The importance of this competition was getting people excited about Muon. The algorithm wasn't exactly new — it's a modification of an optimizer proposed by Volkan Cevher and coauthors back in 2015 that worked well for Boltzmann machines. My understanding is it wasn't widely used until the competition. But when people get excited about a new method, they do everything in their power to improve it and demonstrate it at scale. For example, Moonshot used Muon to train their Kimi K2 model, and Essential AI also proved it out at larger scale.
+
+Now I actually think I know why Muon is uniquely suited to deep learning problems — you can quickly get to the point by reading my [100-page paper](https://arxiv.org/abs/2512.04299){:target="_blank"} on the topic (light reading). But let's put that aside and just tell you what it is.
+
+### 7.2 The singular value decomposition (SVD)
+
+In deep learning, especially transformer training, almost all parameters are matrices — the MLP weights, the attention projections $W_Q, W_K, W_V$, and so on. So the gradient with respect to a weight matrix is also a matrix. (Gradients are always the same size and shape as the variable.)
+
+The natural thing to do is to treat the gradient as a matrix and start doing matrix-like things to it. For simplicity, assume we're optimizing $L(W)$ for a single weight matrix $W$. The gradient $G = \nabla L(W)$ is also a matrix.
+
+To introduce Muon, I need to remind you of a key fact from linear algebra: **every matrix has a singular value decomposition**.
+
+I suspect many of you have not seen the SVD before. The SVD is like a diagonalization of a non-square matrix. It's closely related to the diagonalization of the Gram matrices.
+
+Let $A \in \mathbb{R}^{m \times n}$ be a (possibly rectangular) matrix. From the spectral theorem:
+
+1. $A^TA$ is square ($n \times n$) and symmetric, so it diagonalizes as $A^TA = V\Lambda V^T$ for an orthogonal matrix $V$ ($V^TV = I$) and a diagonal matrix $\Lambda$ ($n \times n$) consisting of the eigenvalues of $A^TA$.
+2. Similarly, $AA^T = UDU^T$ where $D$ ($m \times m$) has the eigenvalues of $AA^T$ and $U$ is orthogonal.
+
+**Key fact:** $\Lambda$ and $D$ are different sizes ($n \times n$ vs $m \times m$), but their nonzero eigenvalues are the same. If $r = \text{rank}(A)$, there are exactly $r$ nonzero eigenvalues, and they match between the two. Call their square roots $\sigma_1 \geq \sigma_2 \geq \cdots \geq \sigma_r > 0$.
+
+From these decompositions, one can show that
+
+$$
+A = U\Sigma V^T,
+$$
+
+where $\Sigma$ is an $m \times n$ matrix that is zero everywhere except $\Sigma_{ii} = \sigma_i$ for $i = 1, \ldots, r$. The $\sigma_i$ are called the **singular values** of $A$. When some of them are zero (i.e., $r < \min(m,n)$), the matrix is low-rank.
+
+Geometrically, any matrix $A$ decomposes into three operations:
+
+1. **Rotate** using $V^T$.
+2. **Scale** using $\Sigma$ (stretch or compress along each axis, possibly changing dimension from $\mathbb{R}^n$ to $\mathbb{R}^m$).
+3. **Rotate** using $U$.
+
+![SVD geometry](figures/svd_geometry.png)
+
+*Figure 7.1: The SVD of a matrix $A$ applied to a unit circle. First $V^T$ rotates (aligning with principal axes), then $\Sigma$ scales (turning the circle into an ellipse), then $U$ rotates to the final orientation.*
+
+Consistency check (carry out the multiplication, using $U^TU = I$ and $V^TV = I$):
+
+$$
+A^TA = (U\Sigma V^T)^T(U\Sigma V^T) = V\Sigma^T U^TU\Sigma V^T = V\Sigma^T\Sigma V^T = V\Lambda V^T. \quad \checkmark
+$$
+
+$$
+AA^T = (U\Sigma V^T)(U\Sigma V^T)^T = U\Sigma V^TV\Sigma^T U^T = U\Sigma\Sigma^T U^T = UDU^T. \quad \checkmark
+$$
+
+Here $\Sigma^T\Sigma$ is $n \times n$ with diagonal entries $\sigma_i^2$, which is $\Lambda$, and $\Sigma\Sigma^T$ is $m \times m$ with diagonal entries $\sigma_i^2$, which is $D$.
+
+Two examples:
+
+**Example 1.** Let
+
+$$
+A = \begin{bmatrix} 3 & 0 \\ 0 & 2 \end{bmatrix}.
+$$
+
+This is already diagonal, so the SVD is trivial: $U = V = I$ and
+
+$$
+A = \begin{bmatrix} 1 & 0 \\ 0 & 1 \end{bmatrix} \begin{bmatrix} 3 & 0 \\ 0 & 2 \end{bmatrix} \begin{bmatrix} 1 & 0 \\ 0 & 1 \end{bmatrix}^T.
+$$
+
+The singular values are $\sigma_1 = 3$ and $\sigma_2 = 2$.
+
+**Example 2.** Let
+
+$$
+A = \begin{bmatrix} 1 & 1 \\ 0 & 0 \end{bmatrix}.
+$$
+
+This has rank 1. We compute
+
+$$
+A^TA = \begin{bmatrix} 1 & 1 \\ 1 & 1 \end{bmatrix},
+$$
+
+which has eigenvalues 2 and 0. So $\sigma_1 = \sqrt{2}$ and $\sigma_2 = 0$. The full SVD is:
+
+$$
+A = \begin{bmatrix} 1 & 0 \\ 0 & 1 \end{bmatrix} \begin{bmatrix} \sqrt{2} & 0 \\ 0 & 0 \end{bmatrix} \begin{bmatrix} 1/\sqrt{2} & 1/\sqrt{2} \\ -1/\sqrt{2} & 1/\sqrt{2} \end{bmatrix}^T.
+$$
+
+You can verify: $V^T$ rotates $(1,0)$ to $(1/\sqrt{2}, 1/\sqrt{2})$, then $\Sigma$ scales the first component by $\sqrt{2}$ and kills the second, giving $(\sqrt{2} \cdot 1/\sqrt{2},\, 0) = (1, 0)$, then $U = I$ does nothing. So $Ae_1 = (1, 0)$. Similarly $Ae_2 = (1, 0)$. That checks out: every column of $A$ is $(1, 0)$.
+
+### 7.3 Spectral gradient methods
+
+Alright, so that is the SVD. Now Muon is an example of a **spectral gradient method**. Here's how they work.
+
+Suppose we have a baseline optimization method: $W_+ = W - G$ for some search direction $G$ (a matrix). $G$ could be the gradient; in that case this is just GD.
+
+Now define the following operation. Take the SVD of $G = U\Sigma V^T$. Replace every nonzero entry of $\Sigma$ with 1. Call this $\text{sign}(\Sigma)$. Then define:
+
+$$
+\text{polar}(G) = U \cdot \text{sign}(\Sigma) \cdot V^T.
+$$
+
+This is the **matrix polar factor** of $G$.
+
+The "spectral version" of the algorithm is:
+
+$$
+W_+ = W - \eta \cdot \text{polar}(G).
+$$
+
+When $G = \nabla L(W)$, this is **spectral gradient descent**. When $G$ is the exponential moving average of past gradients:
+
+$$
+G_{k+1} = (1-\gamma) G_k + \gamma \nabla L(W_k), \qquad W_+ = W - \eta \cdot \text{polar}(G_{k+1}),
+$$
+
+this is **Muon** (Momentum + Orthogonalization).
+
+### 7.4 What to make of this
+
+OK, so this all seems pretty random, right? Well, that's natural and OK. Many things in deep learning feel like that, because people are basically trying all possibilities to get any kind of edge. It's not usually motivated by deep thinking. It's not until years later that the theoretical community catches up to some understanding (if ever) and starts to explain what's "really" happening. I made my attempt with [arXiv:2512.04299](https://arxiv.org/abs/2512.04299){:target="_blank"}, but that's a separate 1-hour talk.
+
+The important point is that Muon is a new algorithm you should know the mechanics of, because it's probably not going away and it's replacing Adam in some settings.
+
+Also notice the connection to SignSGD: SignSGD replaces each coordinate of the gradient vector with its sign ($+1$ or $-1$). Muon replaces the singular values of the gradient matrix with 1. It's like Signum but in the spectral sense — it normalizes the singular values of the matrix instead of the entries of the vector.
+
+<!-- Appendix: figure generation details
+
+### Figure 2.1: Learning rate schedules
+**File:** `scripts/plot_lr_schedules.py` → `figures/lr_schedules.png`
+
+Four curves on the same axes: constant ($\eta = 0.1$), cosine (from 0.1 to 0), warmup + cosine (linear warmup for 5000 steps to 0.1, then cosine to 0), and step decay (drop by 10x at steps 30k and 60k). All over 90,000 steps.
+
+### Figure 2.2: GD vs momentum on ravine
+**File:** `scripts/plot_momentum_ravine.py` → `figures/momentum_ravine.png`
+
+Contour plot of $f(x,y) = x^2 + y^4$ with two trajectories: GD (red) and GD with momentum $\mu=0.9$ (blue), both with $\eta = 0.01$, starting from $(3, 3)$, 200 steps. GD should zigzag/crawl; momentum should move faster along the ravine.
+
+### Figure 3.1: LoRA matrix dimensions
+**File:** `scripts/plot_lora_matrices.py` → `figures/lora_matrices.png`
+
+Diagram showing $W$ ($d \times d$), $A$ ($d \times r$), and $B^T$ ($r \times d$) with $r \ll d$. Annotate dimensions. Show $AB^T$ has the same size as $W$ but far fewer parameters.
+
+### Figure 5.1: Coordinate scaling comparison
+**File:** `scripts/plot_coordinate_scaling.py` → `figures/coordinate_scaling.png`
+
+Contour plot of $f(x,y) = x^2 + y^4$ with three trajectories from $(3, 3)$: GD constant step (red, slow), GD per-coordinate (green, fast), Adam (blue).
+
+### Figure 6.1: Newton's method on coupled function
+**File:** `scripts/plot_newton_ravine.py` → `figures/newton_ravine.png`
+
+Contour plot of $f(x,y) = (x-y)^2 + (x+y)^4$ with three trajectories from $(3, 1)$: GD (red), per-coordinate GD (orange), Newton (green). Show Hessian eigenvectors at starting point as arrows.
+
+### Figure 7.1: SVD geometry
+**File:** `scripts/plot_svd_geometry.py` → `figures/svd_geometry.png`
+
+Three-panel figure showing unit circle → rotated by $V^T$ → scaled by $\Sigma$ → rotated by $U$. Use a specific $2 \times 2$ matrix $A$ with distinct singular values. -->

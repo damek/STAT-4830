@@ -33,13 +33,13 @@ title: Table of Contents
 [7. Reinforcement learning for language models](section/7/notes.md)
    > The REINFORCE gradient estimator, baselines, KL penalties, rejection sampling, gradient weight rescaling, and a reward shaping experiment on Shakespeare.
 
+[8. More on optimizers](section/8/notes.md)
+   > Algorithm modifiers (momentum, schedulers, gradient clipping), techniques that change the problem (LoRA, quantization, weight decay), the optimizer zoo (SignSGD, Signum, AdaGrad, RMSProp, Adam, AdamW), coordinate-wise scaling, Newton's method, and Muon.
+
    
 ---
 
 Some 2025 content below; yet to be deleted.
-
-[8. Stochastic Gradient Descent: The general problem and implementation details](section/8/notes.md) | [Notebook](https://colab.research.google.com/github/damek/STAT-4830/blob/main/section/8/notebook.ipynb)
-   > Stochastic optimization problems, SGD, tweaks, and implementation in PyTorch
 
 [9. Adaptive Optimization Methods](section/9/notes.md) | [Notebook](https://colab.research.google.com/github/damek/STAT-4830/blob/main/section/9/notebook.ipynb) | [Cheatsheet](section/9/cheatsheet.md)
    > Intro to adaptive optimization methods: Adagrad, Adam, and AdamW.
