@@ -73,6 +73,23 @@ optimizer.step()
 
 `zero_grad()` clears old gradients. `backward()` computes new ones. `step()` reads `.grad` on each parameter and updates it according to the optimizer's rule. You can swap `SGD` for any other optimizer — nothing else in your code changes. Only the update rule inside `step()` changes.
 
+A few nuances worth knowing:
+
+**Parameter groups.** The first argument to an optimizer is usually `model.parameters()`, which hands it every learnable tensor in the model. But sometimes you want different settings for different parameters — for example, a higher learning rate on the classifier head, or weight decay on matrices but not biases. You do this by passing a list of dicts:
+
+```python
+optimizer = torch.optim.SGD([
+    {'params': model.backbone.parameters(), 'lr': 1e-3},
+    {'params': model.head.parameters(), 'lr': 1e-2},
+], momentum=0.9)
+```
+
+Each dict is a "parameter group" with its own settings. Any setting not specified in the dict falls back to the default you pass at the top level.
+
+**Schedulers.** Most training runs decay the learning rate over time. PyTorch provides `torch.optim.lr_scheduler` for this. You wrap an optimizer in a scheduler and call `scheduler.step()` after each `optimizer.step()`. We'll discuss several specific schedules in Section 2.2 (cosine decay, warmup, etc.), and each of them can be implemented through this interface.
+
+**State.** Optimizers like Adam maintain internal buffers (momentum, squared gradient averages) for each parameter. These live in `optimizer.state_dict()` and get saved/loaded alongside the model. If you resume training from a checkpoint, you need to reload the optimizer state too — otherwise the buffers reset and training may spike.
+
 ### 1.3 Three categories
 
 There are a few different ways you can modify a training loop:
