@@ -197,8 +197,11 @@ $$
 
 These produce identical iterates when $\beta = \mu$. To see why: define $d_k = \theta_k - \theta_{k-1}$. In the velocity formulation, $d_{k+1} = -\eta(\mu v_k + g_k) = \mu(-\eta v_k) - \eta g_k = \mu \, d_k - \eta g_k$, which matches Polyak. PyTorch uses the velocity form: `torch.optim.SGD(params, lr=0.01, momentum=0.9)`.
 
-Why does this help on the ravine? Near the ravine floor ($y \approx 0$), the gradient points almost entirely in the $y$-direction (normal to the ravine) with very little $x$-component (tangent to the ravine). So each GD step mostly moves in $y$ and barely moves in $x$. But momentum accumulates those small tangent components across steps. The $x$-velocity builds up, pushing you along the ravine.
-More precisely: if the gradient is constant $g$ every step, the velocity converges to $g/(1-\mu)$. With $\mu = 0.9$ the effective step is $10\eta$. If the gradient alternates between $+g$ and $-g$, the velocity stays near zero. So momentum amplifies consistent directions and damps oscillating ones.
+Why does this help on the ravine? The ravine for $f(x,y) = x^2 + y^4$ runs along the $x$-axis. Starting from a point like $(3, 2)$, the gradient is $(6, 32)$ — the steep $y$-direction forces you to pick a tiny stepsize $\eta$ to avoid diverging. That tiny $\eta$ then limits progress everywhere.
+
+Once GD reaches a neighborhood of the ravine ($y$ small), the $x$-gradient ($2x$) is much bigger than the $y$-gradient ($4y^3 \approx 0$). The $y$ direction makes very little progress because the quartic is extremely flat near zero. And the $x$-gradient can oscillate in sign if GD overshoots across the ravine.
+
+Momentum helps because the $y$-gradient is consistent (always pointing toward the origin along the ravine), so the $y$-velocity builds up: with $\mu = 0.9$, the effective step in a consistent direction is $\sim \eta/(1-\mu) = 10\eta$. Meanwhile the oscillating $x$-component gets damped. This picture doesn't show the oscillation clearly, but the velocity buildup in the consistent direction is the key mechanism.
 
 There's also Nesterov momentum (`nesterov=True`), which evaluates the gradient at a lookahead point. The practical difference for neural networks is small.
 
