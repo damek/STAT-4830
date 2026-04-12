@@ -36,13 +36,13 @@ title: Table of Contents
 [8. More on optimizers](section/8/notes.md)
    > Algorithm modifiers (momentum, schedulers, gradient clipping), techniques that change the problem (LoRA, quantization, weight decay), the optimizer zoo (SignSGD, Signum, AdaGrad, RMSProp, Adam, AdamW), coordinate-wise scaling, Newton's method, and Muon.
 
+[9. Benchmarking Optimizers](section/9/notes.md)
+   > How to compare optimizers fairly: time-to-result, why tuning is inseparable from the optimizer, and the AlgoPerf benchmark.
+
    
 ---
 
 Some 2025 content below; yet to be deleted.
-
-[9. Benchmarking Optimizers](section/9/notes.md)
-   > How to compare optimizers fairly: time-to-result, why tuning is inseparable from the optimizer, and the AlgoPerf benchmark.
 
 [11. A Playbook for Tuning Deep Learning Models](section/11/notes.md) | [Cheatsheet](section/11/cheatsheet.md)
    > A systematic process for [tuning deep learning models](https://github.com/google-research/tuning_playbook)
