@@ -1,356 +1,191 @@
 ---
 layout: course_page
-title: Adagrad, Adam, and AdamW 
+title: Benchmarking optimizers
 ---
 
-# Adagrad, Adam, and AdamW
+# 9. Benchmarking optimizers
 
-1.  [Cheat Sheet](cheatsheet.md)
-2.  [notebook](https://colab.research.google.com/github/damek/STAT-4830/blob/main/section/9/notebook.ipynb)
+[YouTube Presentation on AlgoPerf](https://www.youtube.com/watch?v=_yX1ItxReLY){:target="_blank"}
 
 ## Table of contents
+1. [Which optimizer should you use?](#1-which-optimizer-should-you-use)
+2. [Loss curves can cross](#2-loss-curves-can-cross)
+3. [Time-to-result](#3-time-to-result)
+4. [Tuning is inseparable from the optimizer](#4-tuning-is-inseparable-from-the-optimizer)
+5. [AlgoPerf](#5-algoperf)
+6. [What the benchmark found](#6-what-the-benchmark-found)
+7. [Takeaways](#7-takeaways)
 
-1.  [Motivation](#motivation)
-2.  [Algorithm Definitions](#algorithm-definitions)
-3.  [Theoretical Analysis](#theoretical-analysis)
-4.  [Implementation](#implementation)
-5.  [Example Experiment](#example-experiment)
-6.  [References](#references)
+## 1. Which optimizer should you use?
 
-## Motivation
+Last time we laid out a bunch of optimizers: SGD, momentum, Adam, AdamW, SignSGD, Muon. We showed you what each one computes. We showed you the PyTorch interface. You can swap any of them in and out with a single line of code.
 
-SGD performs poorly when input features have varying scales or the loss function $L(w)$ is poorly conditioned. Poor conditioning means the Hessian matrix $\nabla^2 L(w)$ has eigenvalues with widely different magnitudes, measured by the condition number $\kappa = \lambda_{\max} / \lambda_{\min}$. The loss landscape then exhibits elongated valleys. SGD may oscillate across steep dimensions while progressing slowly along flat dimensions. For deep learning models, parameter gradients often vary significantly across layers, exacerbating this issue.
+Natural question: which one should you actually use?
 
-Consider a quadratic problem 
+This question gets answered wrong surprisingly often, even by researchers who should know better. This lecture is about how to get it right. The ideas are all common sense, but they're often missed.
 
-$$L(w) = \frac{1}{2}(h_1 w_1^2 + h_2 w_2^2)$$
+The main messages are:
 
-with $h_1 \gg h_2 > 0$. The condition number is $\kappa = h_1/h_2$. SGD requires a learning rate $\alpha < 2/h_1$ for stability. This choice yields slow convergence for $w_2$, proportional to $(1 - \alpha h_2)^k \approx (1 - h_2/h_1)^k$, which is slow when $\kappa$ is large.
+1. **Tuning is inseparable from the optimizer.** You cannot compare two optimizers without specifying exactly how you tuned their hyperparameters.
+2. **When someone releases a new optimizer claiming it's 2x better than the state-of-the-art baseline, the baseline was probably under-tuned.**
 
-Adaptive optimization methods address this by assigning each parameter $w_i$ its own learning rate. These methods typically scale the learning rate for $w_i$ inversely proportional to a function of its historical gradient magnitudes $g_{t,i}$. Parameters with consistently large gradients receive smaller effective learning rates, while those with small gradients receive larger ones. This automatically handles varying feature scales and improves performance on ill-conditioned problems.
+I [tweeted](https://x.com/damekdavis/status/1911512233491964219){:target="_blank"} this in April 2025:
 
-Adagrad (Duchi et al., 2011) was an early adaptive method. It accumulates squared gradients to scale the learning rate. RMSProp (Tieleman & Hinton, 2012) improved Adagrad by using a moving average of squared gradients, preventing learning rates from vanishing. Adam (Kingma & Ba, 2015) combined RMSProp's adaptive rates with momentum and bias correction. AdamW (Loshchilov & Hutter, 2019) modified Adam's weight decay implementation for potentially better regularization. Adam is widely used, particularly for training large language models.
+![Tweet: tuning is inseparable from the optimizer](figures/tweet.png)
 
-## Algorithm Definitions
+*Almost every week a new paper shows up on Twitter claiming their optimizer is way better. It's almost never true once you tune the baseline properly.*
 
-### Adagrad
+Let's walk through why.
 
-Adagrad adapts the learning rate for each parameter $w_i$ based on the history of its gradients $g_{t,i} = [\nabla \ell(w_{t-1}, z_t)]_i$. At iteration $t$, Adagrad first computes the sum of squared gradients for parameter $i$ up to iteration $t$:
+## 2. Loss curves can cross
 
-$$G_{t,ii} = \sum_{j=1}^{t} g_{j,i}^2$$
+The most natural thing to do is train a model with two different optimizers and plot the loss curve. Whoever gets lower loss is "better," right?
 
-The update rule for parameter $w_{t,i}$ uses this sum to scale the global learning rate $\alpha$:
+The problem is that loss curves cross. One optimizer might look great early and then plateau, while another starts slow and then overtakes. So who "wins" depends entirely on when you stop training. If you stop at step 10,000, optimizer A looks better. If you stop at step 50,000, optimizer B looks better, and there is no unambiguous winner.
 
-$$w_{t,i} = w_{t-1,i} - \frac{\alpha}{\sqrt{G_{t,ii} + \epsilon}} \cdot g_{t,i}$$
+Dahl et al. (2023) illustrate this. The figure below shows two training runs on the same optimizer and task. The validation error curves cross. Even if you look at the running minimum (the best validation error achieved so far), the curves still cross, as indicated by the red markers.
 
-Here, $\epsilon$ is a small constant (e.g., $10^{-8}$) for numerical stability. The term $G_{t,ii}$ causes the effective learning rate for $w_i$ to decrease as training progresses. Parameters receiving large or frequent gradients experience faster learning rate decay. This adaptation is useful for problems with sparse gradients, as infrequent updates receive larger effective step sizes. A drawback is that $G_{t,ii}$ increases monotonically, causing the effective learning rate to eventually become very small, potentially stopping learning prematurely.
+![Optimizer Comparison Curves](figures/dahl_fig1.png)
 
-### Adam
+*Figure 2.1 (from Dahl et al., 2023, Figure 1): A direct comparison of training curves is ill-posed if they intersect. Left: validation error for two different runs. Right: the running minimum of each curve. Even this smoothed metric intersects multiple times.*
 
-Adam (Adaptive Moment Estimation) combines adaptive learning rates with momentum. It maintains two exponential moving averages (EMAs) for each parameter. The first moment estimate, $m_t$, tracks the mean of the gradients. The second moment estimate, $v_t$, tracks the uncentered variance of the gradients. Given the gradient $g_t = \nabla \ell(w_{t-1})$, these estimates are updated as:
+So just looking at curves doesn't work. We need a single number.
 
-$$
-\begin{aligned}
-m_t &= \beta_1 m_{t-1} + (1 - \beta_1) g_t \\
-v_t &= \beta_2 v_{t-1} + (1 - \beta_2) g_t^2
-\end{aligned}
-$$
+## 3. Time-to-result
 
-The operations are element-wise, and $\beta_1, \beta_2$ are decay rates (e.g., $0.9$ and $0.999$). Since $m_0=0$ and $v_0=0$, these estimates are biased towards zero in early iterations. For example, if $g_t=g$ is constant, $m_t = (1 - \beta_1^t) g$, showing the estimate is scaled by $(1 - \beta_1^t)$. Adam corrects this initialization bias:
+The fix is simple: pick a target performance level (say, 90% validation accuracy, or a specific loss value) and measure how long each optimizer takes to first reach that target.
 
-$$
-\begin{aligned}
-\hat{m}_t &= \frac{m_t}{1 - \beta_1^t} \\
-\hat{v}_t &= \frac{v_t}{1 - \beta_2^t}
-\end{aligned}
-$$
+This gives you one number per optimizer, which removes the ambiguity of comparing curves at different points in training. Either you hit the target in 2 hours or you hit it in 3 hours, and the faster one wins.
 
-The bias correction factors approach 1 as $t$ increases. The parameter update uses these corrected estimates:
+This is called **time-to-result**, and it's the standard metric in serious benchmarking (Dahl et al., 2023). You do need to choose the target carefully: it should be meaningful (not trivially easy, not impossibly hard), and both optimizers should be able to reach it.
 
-$$w_t = w_{t-1} - \alpha \frac{\hat{m}_t}{\sqrt{\hat{v}_t} + \epsilon}$$
+OK great, so now we have a way to compare. Let's take SGD, Momentum, and Adam, run them on a task, and see who reaches the target first.
 
-Here, $\alpha$ is the step size (e.g., $0.001$) and $\epsilon$ prevents division by zero (e.g., $10^{-8}$). The term $\alpha / (\sqrt{\hat{v}_t} + \epsilon)$ acts as an adaptive learning rate, decreasing for parameters with large second moment estimates. The term $\hat{m}_t$ incorporates momentum. Adam involves several hyperparameters ($\alpha, \beta_1, \beta_2, \epsilon$) whose tuning can affect performance ([Choi et al., 2020](https://arxiv.org/abs/1910.05446)). PyTorch defaults are often $\beta_1=0.9, \beta_2=0.999, \epsilon=10^{-8}$.
+But wait. What learning rate did we use?
 
-### AdamW
+## 4. Tuning is inseparable from the optimizer
 
-Standard L2 regularization adds $\frac{\lambda}{2}\|w\|\_2^2$ to the loss $L(w)$. The gradient becomes $g\_t = \nabla \ell(w\_{t-1}) + \lambda w\_{t-1}$. In SGD, this is equivalent to weight decay: 
+Here's the thing. When you say "Adam," you don't mean a single algorithm. You mean a family of algorithms parameterized by the learning rate $\eta$, momentum coefficients $\beta_1$ and $\beta_2$, the epsilon $\epsilon$, weight decay $\lambda$, plus a learning rate schedule, plus warmup steps, and so on. Same for SGD: it's parameterized by $\eta$, momentum $\mu$, weight decay, and schedule.
 
-$$w_t = (1 - \alpha\lambda)w_{t-1} - \alpha\nabla \ell(w_{t-1})$$
+The performance of any optimizer depends hugely on these choices.
 
-Loshchilov and Hutter (2019) noted this equivalence fails for Adam because the regularization term $\lambda w\_{t-1}$ within $g\_t$ gets adaptively scaled by $1/\sqrt{\hat{v}\_t}$, making the effective weight decay dependent on gradient history.
+So when you say "Adam beats SGD," what you really mean is: "Adam with the hyperparameters I happened to try beats SGD with the hyperparameters I happened to try." That's a statement about your tuning procedure, not about the algorithms themselves.
 
-AdamW decouples weight decay from the adaptive update mechanism. The AdamW update first computes the gradient $g_t = \nabla \ell(w\_{t-1})$. It updates the moment estimates $m_t$ and $v_t$ using $g_t$, and computes the bias-corrected $\hat{m}\_t$ and $\hat{v}\_t$ as in Adam. The parameter update then applies weight decay directly to the weights before incorporating the scaled momentum term:
+### 4.1 Optimizer inclusion
 
-$$w_t = (1 - \alpha\lambda)w_{t-1} - \frac{\alpha}{\sqrt{\hat{v}_t} + \epsilon}\hat{m}_t$$
+There's a really clean way to think about this. Choi et al. (2019) introduced the idea of **optimizer inclusion**. An optimizer M is a subset of optimizer N (written $M \subseteq N$) if N can exactly replicate M by setting some of its hyperparameters to specific values.
 
-This formulation applies a consistent weight decay factor $\alpha\lambda$ (or sometimes just $\lambda$ in implementations) to all parameters. The authors claim this decoupling improves generalization and makes the optimal weight decay factor less dependent on the learning rate compared to standard Adam with L2 regularization.
+For example:
 
-### Figure Interpretations
+- **SGD $\subseteq$ Momentum**, because Momentum with $\mu = 0$ is just SGD.
+- **SGD $\subseteq$ Momentum $\subseteq$ Adam** (roughly, since Adam with $\beta_1 = 0$ and $\beta_2 \to 0$ approaches SGD).
 
-![section 2 figure](figures/section2_figures.png)
+So if you had infinite compute to tune hyperparameters, the more general optimizer should always win. It can do everything the simpler one can do, plus more. Since Adam's search space contains SGD as a special case, the best Adam configuration is at least as good as the best SGD configuration.
 
-Figure 2.1 shows Adagrad's effective learning rate $\alpha / \sqrt{G_{t,ii}+\epsilon}$ decreasing over time. The decrease is faster for the parameter with larger historical gradients (green line). This illustrates per-parameter adaptation but also the potential for learning to stall.
+### 4.2 Finite tuning budgets
 
-Figure 2.2 compares the denominator terms. Adagrad's sum of squares $G_{t,ii}$ (red line) increases without bound. Adam's EMA $v_t$ (blue, green, purple lines for different $\beta_2$) stabilizes, forgetting older gradients. This allows Adam to avoid Adagrad's vanishing learning rates. Higher $\beta_2$ implies more smoothing and slower adaptation to gradient changes.
+But in practice you don't have infinite compute for tuning. You run maybe 20 or 50 trials.
 
-Figure 2.3 shows the effect of Adam's bias correction. Uncorrected moments $m_t, v_t$ (dashed lines) start near zero and increase slowly. Bias-corrected moments $\hat{m}_t, \hat{v}_t$ (solid lines) approach their true values faster, enabling more effective updates early in training, especially when $\beta_1, \beta_2$ are close to 1.
+And here's where it gets interesting. With a limited tuning budget, the simpler optimizer can appear to win. Why? Because the simpler optimizer has fewer hyperparameters to search over. With the same budget, you explore its space more thoroughly. The more general optimizer has a bigger search space, and if you don't explore it well enough, you might land on a bad configuration.
 
-Okay, here is a revised "Theoretical Analysis" section incorporating your feedback.
+So a limited tuning budget can reverse the inclusion hierarchy: Adam, which should in theory always be at least as good as SGD, can appear worse simply because you didn't search its larger hyperparameter space thoroughly enough.
 
----
+### 4.3 Empirical evidence
 
-## Convergence Analysis
+Choi et al. (2019) showed this empirically.
 
-This section presents convergence bounds for Adagrad and Adam, primarily adapted from Défossez et al. (2022). These results provide insights into the algorithms' behavior, although they may not represent the tightest possible bounds currently known. We use this source because its analysis offers a relatively clear comparison between the methods. Analyzing Adam, in particular, has proven challenging; the proof in the original Adam paper (Kingma & Ba, 2015) was later found incorrect, leading to subsequent work like AMSGrad (Reddi et al., 2019) and refined analyses (Ward et al., 2019; Zou et al., 2019a,b) establishing convergence under specific conditions.
+Wilson et al. (2017) published a well-cited NeurIPS paper arguing that SGD with momentum beats Adam across a range of tasks. Choi et al. investigated what happens when you tune more carefully. When only the learning rate was tuned for both algorithms, Adam appeared worse (consistent with Wilson et al.'s findings). But when additional hyperparameters (Adam's $\epsilon$, the momentum coefficients, etc.) were also tuned using a consistent, fair procedure, the differences vanished.
 
-### Assumptions
+![Tuning Reverses Rankings](figures/choi_fig3.png)
 
-The analysis requires assumptions about the objective function $L(w) = \mathbb{E}\_{z \sim \mathcal{D}}[\ell(w, z)]$.
-1.  **Lower Bounded:** $L(w) \geq L\_* $ for some finite $L\_* $. This prevents divergence.
-2.  **Bounded Gradients ($\ell\_\infty$):** $\|\|\nabla \ell(w, z)\|\|\_\infty \leq R$ for all $w, z$. The coordinate-wise nature of adaptive updates makes the $\ell\_\infty$ norm (maximum absolute coordinate value) a useful bound for analysis.
-3.  **Smoothness ($L$-smooth):** $\|\|\nabla L(w) - \nabla L(w')\|\|\_2 \leq L\|\|w - w'\|\|\_2$. The gradient of the objective $L$ does not change arbitrarily quickly.
+*Figure 4.1 (from Choi et al., 2019, Figure 3): Tuning more hyperparameters removes the differences between optimizers that Wilson et al. (2017) reported. Left: limited tuning, Adam appears worse. Right: comprehensive tuning, all optimizers perform comparably.*
 
-### Convergence Measure
+Actually it can be worse than that. The rankings can flip depending on which hyperparameters you include in the search.
 
-For potentially non-convex objectives, the goal is often to find stationary points where $\nabla L(w) \approx 0$. Convergence is measured by bounding the expected squared norm of the gradient, $\mathbb{E}[\|\|\nabla L(w)\|\|^2]$. Because iterates $w_t$ are random due to stochastic sampling, bounds are typically derived for $\mathbb{E}[\|\|\nabla L(w\_{\tau_N})\|\|^2]$, where $\tau_N$ is a randomly selected index from $\{0, ..., N-1\}$. The sampling distribution for $\tau_N$ might be uniform or weighted depending on the algorithm and analysis (e.g., weighting recent iterates less for Adam with momentum).
+![Tuning Reverses Rankings 2](figures/choi_fig4.png)
 
-The resulting bounds often take the form:
+*Figure 4.2 (from Choi et al., 2019, Figure 4): Rankings change as you tune more hyperparameters. The leftmost columns for each workload reproduce rankings from Schneider et al. (2019), while subsequent columns tune over increasingly general search spaces. Rankings only stabilize and become consistent with the inclusion hierarchy ($\text{SGD} \subseteq \text{Momentum} \subseteq \text{Adam}$) when the tuning protocol is comprehensive enough.*
 
-$$\mathbb{E}[\|\nabla L(w_{\tau_N})\|^2] \leq \text{Term}_1(\text{Initial Error}) + \text{Term}_2(\text{Noise})$$
+### 4.4 Upshot
 
-This structure mirrors the error decomposition seen in SGD analysis (Lectures 6/7), where $\text{Term}\_1$ depends on the initial suboptimality $L(w\_0) - L\_* $ and decreases with iterations $N$, while $\text{Term}\_2$ reflects the impact of stochastic gradient noise.
+The tuning protocol is not external to the optimizer. It is part of the algorithm's definition for empirical comparison.
 
-### Adagrad Result
+You have to specify:
 
-For Adagrad with constant step size $\alpha$, Défossez et al. (2022) show (using uniform sampling for $\tau_N$):
+- What hyperparameters did you search over?
+- What was the search space?
+- How many trials did you run?
+- How did you sample from the search space?
 
-$$\mathbb{E}[\|\nabla L(w_{\tau_N})\|^2] \leq \frac{2R(L(w_0) - L_*)}{\alpha\sqrt{N}} + \frac{1}{\sqrt{N}}\left(4dR^2 + \alpha dRL\right)\ln\left(1 + \frac{NR^2}{\epsilon}\right)$$
+If you don't control for all of this, your comparison is meaningless. You're comparing tuning procedures, not optimizers.
 
-The bound converges at a rate of $O(d \ln(N) / \sqrt{N})$. The initialization term decays as $O(1/\sqrt{N})$. The noise term includes the dimension $d$. This dimension dependence appears worse than typical SGD bounds, which depend on gradient variance 
+And this is why I get annoyed when people post on Twitter that their new optimizer is 2x better than Adam. The question you should always ask: did they tune Adam properly? Did they give Adam the same tuning budget? Did they search over the right hyperparameters?
 
-$$\sigma^2 = \mathbb{E}[\|\nabla \ell(w, z) - \nabla L(w)\|_2^2].$$
+Here's the deeper issue: running a truly fair comparison requires a LOT of compute. However many experiments an academic lab can run, Google can run 10x more. So when an academic claims superiority over a baseline, you have to wonder whether they really had the resources to answer the question they claim to be answering.
 
-However, if gradient components are roughly independent and bounded by $R$, the variance scales like $\|\|g\|\|\_2^2 \leq d R^2$ (e.g., if the noise in the gradient is like a Gaussian random variable). In such cases, the $d$ dependence in Adagrad's bound is comparable to the dependence on variance in SGD bounds. If gradients are sparse (many components near zero), then $\|\|g\|\|\_2^2$ could be much smaller than $dR^2$, potentially making Adagrad's bound looser than SGD's. Adagrad converges with constant $\alpha$ because the adaptive scaling $1/\sqrt{G\_{t,ii}}$ provides implicit dampening.
+## 5. AlgoPerf
 
-### Adam Result
+So how do you actually run a fair comparison? Dahl et al. (2023) at Google built a benchmark called **AlgoPerf** that tries to address all of the problems we've discussed. There is a [YouTube presentation](https://www.youtube.com/watch?v=_yX1ItxReLY){:target="_blank"} if you want to see it explained by the authors.
 
-The analysis of Adam in Défossez et al. (2022) uses a slightly modified step size $\alpha_t = \alpha(1-\beta_1) \sqrt{(1-\beta_2^t)/(1-\beta_2)}$, removing the first moment bias correction for analytical simplicity. For this variant with no momentum ($\beta_1 = 0$) and uniform sampling for $\tau_N$:
-
-$$\mathbb{E}[\|\nabla L(w_{\tau_N})\|^2] \leq \frac{2R(L(w_0) - L_*)}{\alpha N} + E \cdot \left(\frac{1}{N}\ln\left(1 + \frac{R^2}{(1-\beta_2)\epsilon}\right) - \ln(\beta_2)\right)$$
-
-where $E = \frac{4dR^2}{\sqrt{1-\beta_2}} + \frac{\alpha dRL}{1-\beta_2}$. The initialization term decays faster than Adagrad's, at $O(1/N)$. However, the noise term contains a constant component $-E \ln(\beta_2)$ which does not decay with $N$. This creates a "noise floor," meaning Adam with fixed hyperparameters does not converge to a stationary point according to this bound.
-
-Défossez et al. summarize the relationship:
-> **Adam and Adagrad are twins.** Our analysis highlights an important fact: Adam is to Adagrad like constant step size SGD is to decaying step size SGD. While Adagrad is asymptotically optimal, it also leads to a slower decrease of the term proportional to $L(w_0) - L^*$, as $1/\sqrt{N}$ instead of $1/N$ for Adam. During the initial phase of training, it is likely that this term dominates the loss, which could explain the popularity of Adam for training deep neural networks rather than Adagrad. With its default parameters, Adam will not converge. It is however possible to choose $\beta_2$ and $\alpha$ to achieve an asymptotic convergence rate of $O(d\ln(N)/\sqrt{N})$...
-
-Specifically, scheduling $\alpha \propto 1/\sqrt{N}$ and $\beta_2 = 1 - 1/N$ recovers the $O(d\ln(N)/\sqrt{N})$ rate, matching Adagrad.
+The key design principles:
 
-### Impact of Momentum
-
-Introducing momentum ($\beta_1 > 0$) worsens the theoretical bounds presented by Défossez et al. The bound takes a similar form but involves constants that increase with $\beta_1$, roughly scaling with factors like $(1-\beta_1)^{-1}$, and uses a reduced effective iteration count $\tilde{N} < N$. While this $O((1-\beta_1)^{-1})$ dependence is better than prior analyses, it still implies $\beta_1 = 0$ gives the best worst-case guarantee.
-
-This creates a gap between theory and practice, as momentum is widely used and empirically beneficial with Adam. Current convergence bounds do not seem to fully capture momentum's advantages. Recent work analyzing Adam variants reinforces this gap; for example, Guo et al. (2023) state about their bounds:
-> "No better result with momentum... the tightest bound is achieved when $\beta_1 = 0$... This contradicts with the common wisdom that momentum helps to accelerate... we view this as a limitation of our work and defer proving the benefit of momentum in Adam as a future work."
-
-Thus, while momentum empirically helps Adam navigate complex loss landscapes, existing worst-case analyses suggest it hinders convergence rate guarantees.
-
-
-
-## Practical Implementation
-
-### PyTorch Implementation
-
-Let's see how to implement the optimization algorithms we've discussed using PyTorch. PyTorch provides built-in implementations of these optimizers in its `torch.optim` module, but understanding their manual implementation helps clarify the underlying mechanisms.
-
-We'll start with a minimal implementation of Adagrad. The core logic involves accumulating squared gradients and using them to scale the learning rates:
-
-```python
-def adagrad_update(params, grads, state, lr=0.01, eps=1e-8):
-    """
-    Basic Adagrad implementation
-    
-    Args:
-        params: List of parameters
-        grads: List of gradients
-        state: List of accumulators for squared gradients
-        lr: Learning rate
-        eps: Small constant for numerical stability
-    """
-    for i, (param, grad) in enumerate(zip(params, grads)):
-        # Initialize accumulator if needed
-        if len(state) <= i:
-            state.append(torch.zeros_like(param))
-            
-        # Accumulate squared gradients
-        state[i].add_(grad * grad)
-        
-        # Compute update
-        std = torch.sqrt(state[i] + eps)
-        param.addcdiv_(grad, std, value=-lr)
-    
-    return params, state
-```
-
-This implementation follows the Adagrad update rule we defined earlier. For each parameter, we maintain a corresponding state vector that accumulates the squared gradients. We then compute the square root of this accumulation, add a small epsilon for numerical stability, and use this to scale the gradient before applying the update.
-
-Next, let's implement Adam, which adds momentum and bias correction:
-
-```python
-def adam_update(params, grads, m_state, v_state, lr=0.001, 
-                beta1=0.9, beta2=0.999, eps=1e-8, t=1):
-    """
-    Basic Adam implementation
-    
-    Args:
-        params: List of parameters
-        grads: List of gradients
-        m_state: List of first moment estimators
-        v_state: List of second moment estimators
-        lr: Learning rate
-        beta1: Exponential decay rate for first moment
-        beta2: Exponential decay rate for second moment
-        eps: Small constant for numerical stability
-        t: Current iteration number (starting from 1)
-    """
-    # Compute bias correction terms
-    bias_correction1 = 1 - beta1**t
-    bias_correction2 = 1 - beta2**t
-    
-    for i, (param, grad) in enumerate(zip(params, grads)):
-        # Initialize moment estimates if needed
-        if len(m_state) <= i:
-            m_state.append(torch.zeros_like(param))
-            v_state.append(torch.zeros_like(param))
-        
-        # Update biased first moment estimate
-        m_state[i].mul_(beta1).add_(grad, alpha=1-beta1)
-        
-        # Update biased second moment estimate
-        v_state[i].mul_(beta2).add_(grad * grad, alpha=1-beta2)
-        
-        # Correct bias in first moment estimate
-        m_hat = m_state[i] / bias_correction1
-        
-        # Correct bias in second moment estimate
-        v_hat = v_state[i] / bias_correction2
-        
-        # Update parameters
-        param.addcdiv_(m_hat, torch.sqrt(v_hat) + eps, value=-lr)
-    
-    return params, m_state, v_state
-```
-
-This implementation captures the key elements of Adam: maintaining exponentially moving averages of gradients and squared gradients, applying bias correction, and using these estimates to adapt the learning rate for each parameter.
-
-For AdamW, we modify the Adam implementation to decouple weight decay from the adaptive update:
-
-```python
-def adamw_update(params, grads, m_state, v_state, lr=0.001, 
-                 beta1=0.9, beta2=0.999, eps=1e-8, weight_decay=0.01, t=1):
-    """
-    Basic AdamW implementation
-    
-    Args:
-        params: List of parameters
-        grads: List of gradients
-        m_state: List of first moment estimators
-        v_state: List of second moment estimators
-        lr: Learning rate
-        beta1: Exponential decay rate for first moment
-        beta2: Exponential decay rate for second moment
-        eps: Small constant for numerical stability
-        weight_decay: Weight decay coefficient
-        t: Current iteration number (starting from 1)
-    """
-    # Compute bias correction terms
-    bias_correction1 = 1 - beta1**t
-    bias_correction2 = 1 - beta2**t
-    
-    for i, (param, grad) in enumerate(zip(params, grads)):
-        # Initialize moment estimates if needed
-        if len(m_state) <= i:
-            m_state.append(torch.zeros_like(param))
-            v_state.append(torch.zeros_like(param))
-        
-        # Apply weight decay (decoupled from adaptive updates)
-        param.mul_(1 - lr * weight_decay)
-        
-        # Update biased first moment estimate
-        m_state[i].mul_(beta1).add_(grad, alpha=1-beta1)
-        
-        # Update biased second moment estimate
-        v_state[i].mul_(beta2).add_(grad * grad, alpha=1-beta2)
-        
-        # Correct bias in first moment estimate
-        m_hat = m_state[i] / bias_correction1
-        
-        # Correct bias in second moment estimate
-        v_hat = v_state[i] / bias_correction2
-        
-        # Update parameters
-        param.addcdiv_(m_hat, torch.sqrt(v_hat) + eps, value=-lr)
-    
-    return params, m_state, v_state
-```
-
-The key difference in AdamW is the addition of the direct weight decay step, which multiplies each parameter by (1 - lr * weight_decay) before the adaptive update. This decouples the regularization effect from the adaptive learning rates.
-
-In practice, we typically don't implement these optimizers manually but use PyTorch's built-in implementations. Here's how to use them:
-
-```python
-import torch
-import torch.optim as optim
-
-# Define a model
-model = torch.nn.Linear(10, 1)
-
-# Create optimizers
-adagrad_opt = optim.Adagrad(model.parameters(), lr=0.01)
-adam_opt = optim.Adam(model.parameters(), lr=0.001, betas=(0.9, 0.999), eps=1e-8)
-adamw_opt = optim.AdamW(model.parameters(), lr=0.001, betas=(0.9, 0.999), 
-                        eps=1e-8, weight_decay=0.01)
-
-# Training loop
-for X, y in dataloader:
-    # Zero gradients
-    adam_opt.zero_grad()
-    
-    # Forward pass and compute loss
-    output = model(X)
-    loss = criterion(output, y)
-    
-    # Backward pass
-    loss.backward()
-    
-    # Update parameters
-    adam_opt.step()
-```
-
-PyTorch's implementations include additional features like parameter groups (allowing different hyperparameters for different layers) and various optimizations for efficiency. The implementations match the mathematical formulations we've discussed, with minor variations to handle edge cases and improve numerical stability.
-
-## Example Experiment
-
-The provided code compares SGD (with momentum=0.9, wd=1e-4), Adagrad, Adam, and AdamW (wd=1e-4) on Fashion MNIST classification using a simple feedforward network. It trains each optimizer for 20 epochs using specified learning rates (SGD/Adagrad: 0.01, Adam/AdamW: 0.001) and plots training/validation loss and accuracy, along with average time per epoch. The full script and interactive notebook are available via the [colab](https://colab.research.google.com/github/damek/STAT-4830/blob/main/section/9/notebook.ipynb).
-
-![Timing Plot](figures/optimizer_timing.png)
-![Performance Plot](figures/optimizer_comparison.png)
-
-The timing plot shows comparable time per epoch for all methods in this specific setup. The performance plots indicate that for this model, dataset, and hyperparameter choice, the adaptive methods achieved lower loss and higher accuracy more quickly than SGD initially. Final performance appears similar among the adaptive methods. Adam and AdamW tracks are very close.
-
-Empirical optimizer comparisons are sensitive. Performance depends strongly on the model architecture, dataset characteristics, and especially hyperparameter tuning (learning rate, $\beta$ values, weight decay). Results from one experiment do not guarantee general performance differences. Robust benchmarking requires testing across multiple tasks and extensive hyperparameter optimization (e.g., [Algoperf benchmark](https://github.com/mlcommons/algorithmic-efficiency), [Choi et al., 2020](https://arxiv.org/abs/1910.05446)).
+**Time-to-result.** As we discussed. For each task, define a target metric value. Measure wall-clock time to first reach it.
+
+**Fixed hardware.** Everyone runs on the same GPUs. No advantage from having better machines. This makes the wall-clock time measurements meaningful and comparable across submissions.
+
+**Diverse workloads.** The benchmark includes image classification, speech recognition, machine translation, and other tasks. No optimizer gets to win by being good at one thing. They also have held-out workload variants that are sampled *after* submissions are finalized. This prevents people from overfitting their algorithm design to the specific benchmark tasks.
+
+**Explicit tuning rulesets.** This is the critical one. There are two competition tracks:
+
+1. **External tuning:** You provide a hyperparameter search space. The benchmark runs a fixed number of random trials (e.g., 5 studies of 5 trials each), and scores you on the best trial found within that budget. This simulates having a limited compute budget for hyperparameter search, which is the situation most practitioners face.
+2. **Self-tuning:** No external tuning at all. Your algorithm has to be hyperparameter-free, or tune itself during the training run. You get more wall-clock time to compensate for any internal tuning overhead. This is the harder track, but also the more practically useful one: the dream is an optimizer you can just run without fiddling with settings.
+
+**Aggregate scoring across workloads.** Since performance is measured across many tasks, you need a way to summarize. AlgoPerf uses **performance profiles** (Dolan and Moré, 2002). The idea: for each task, measure how much slower you are compared to the fastest submission. Then plot the fraction of tasks you solved within a given slowdown factor. An optimizer whose line is higher and further to the left is better, meaning it solves more problems faster.
+
+## 6. What the benchmark found
+
+The first AlgoPerf competition ran and the results were analyzed by Kasimbeg et al. (2024).
+
+![AlgoPerf Competition Results](figures/kasimbeg_fig1.png)
+
+*Figure 6.1 (from Kasimbeg et al., 2024, Figure 1): Leaderboard and performance profiles for all submissions. Top row: external tuning ruleset. Bottom row: self-tuning ruleset. Left: leaderboard ranked by benchmark score. Right: performance profiles showing the fraction of workloads solved within a given slowdown factor.*
+
+**External tuning winner: Distributed Shampoo** (PyTorch implementation). This is a preconditioning method in the spirit of Newton's method from [Lecture 8](../8/notes.md), where you multiply the gradient by a matrix that accounts for curvature, but approximated in a way that's actually implementable at scale. It was ~28% faster than the NadamW baseline on average across workloads.
+
+**Self-tuning winner: Schedule-Free AdamW.** No external tuning at all, and it was competitive with externally tuned methods. It was ~10% faster than the externally tuned baseline on the workloads it completed. This is real progress toward the goal of optimizers that just work out of the box.
+
+But look at the per-workload breakdown:
+
+![AlgoPerf Per-Workload Runtimes](figures/kasimbeg_table1.png)
+
+*Table 6.1 (from Kasimbeg et al., 2024, Table 1): Normalized runtimes across all workloads. The fastest submission per workload is in bold. Gray cells indicate failures: timeouts (`inf`), errors (`NaN`), or disqualifications due to held-out workload issues (`†`, `‡`).*
+
+Many submissions failed on some workloads entirely. The winners weren't always the absolute fastest on every single task; they were the most **robust**. They hit the target reliably across the whole suite. Robustness and reliability across diverse tasks, rather than peak speed on a select few, were the critical factors for achieving a high overall benchmark score.
+
+No single optimizer dominates everything. The rankings depend on the task.
+
+## 7. Takeaways
+
+1. **Tuning is inseparable from the optimizer.** You cannot evaluate an optimizer without specifying the tuning protocol: the search space, the budget, the sampling method. The tuning protocol is part of the algorithm.
+
+2. **When someone claims their new optimizer is dramatically better, ask: did they tune the baseline?** How many trials? What search space? The baseline was probably under-tuned.
+
+3. **Running a real comparison is expensive.** It requires many tasks, many trials, fixed hardware, and explicit rules. Most papers don't have the budget to do this properly. However many experiments an academic lab can run, a place like Google can run 10x more.
+
+4. **When Google did run these comparisons properly (AlgoPerf), the picture was nuanced.** Advanced preconditioning (Distributed Shampoo) helps. Self-tuning algorithms (Schedule-Free AdamW) are getting competitive. But no single method wins everywhere. Robustness matters more than peak performance.
+
+5. **As a practitioner:** look at what people are doing for your specific problem. If everyone training your type of model uses AdamW, start there. If you have the compute to tune, try alternatives. But don't switch optimizers because of a Twitter thread.
 
 ## References
 
-**[1]** Duchi, J., Hazan, E., & Singer, Y. (2011). *Adaptive subgradient methods for online learning and stochastic optimization*. Journal of Machine Learning Research, 12(Jul), 2121-2159. [Link](https://www.jmlr.org/papers/volume12/duchi11a/duchi11a.pdf)
+1. **Choi et al., 2019:** Dami Choi, Christopher J. Shallue, Zachary Nado, Jaehoon Lee, Chris J. Maddison, and George E. Dahl. (2019). *On Empirical Comparisons of Optimizers for Deep Learning*. arXiv preprint arXiv:1910.05446. [Link](https://arxiv.org/abs/1910.05446){:target="_blank"}
 
-**[2]** Tieleman, T., & Hinton, G. (2012). *Lecture 6.5—RMSProp: Divide the gradient by a running average of its recent magnitude*. COURSERA: Neural Networks for Machine Learning. [Link](https://www.cs.toronto.edu/~tijmen/csc321/slides/lecture_slides_lec6.pdf)
+2. **Dahl et al., 2023:** George E. Dahl, Frank Schneider, Zachary Nado, Naman Agarwal, Chandramouli Shama Sastry, Philipp Hennig, Sourabh Medapati, Runa Eschenhagen, Priya Kasimbeg, Daniel Suo, Juhan Bae, Justin Gilmer, Abel L. Peirson, Bilal Khan, Rohan Anil, Mike Rabbat, Shankar Krishnan, Daniel Snider, Ehsan Amid, Kongtao Chen, Chris J. Maddison, Rakshith Vasudev, Michal Badura, Ankush Garg, and Peter Mattson. (2023). *Benchmarking Neural Network Training Algorithms*. arXiv preprint arXiv:2306.07179. [Link](https://arxiv.org/abs/2306.07179){:target="_blank"}
 
-**[3]** Kingma, D. P., & Ba, J. (2015). *Adam: A method for stochastic optimization*. International Conference on Learning Representations (ICLR). [Link](https://arxiv.org/abs/1412.6980)
+3. **Dolan & Moré, 2002:** Elizabeth D. Dolan and Jorge J. Moré. (2002). *Benchmarking optimization software with performance profiles*. Mathematical Programming, 91(2), 201–213.
 
-**[4]** Loshchilov, I., & Hutter, F. (2019). *Decoupled weight decay regularization*. International Conference on Learning Representations (ICLR). [Link](https://arxiv.org/abs/1711.05101)
+4. **Kasimbeg et al., 2024:** Priya Kasimbeg, Frank Schneider, Runa Eschenhagen, Juhan Bae, Chandramouli Shama Sastry, Mark Saroufim, Boyuan Feng, Less Wright, Edward Z. Yang, Zachary Nado, Sourabh Medapati, Philipp Hennig, Mike Rabbat, George E. Dahl. (2024). *Accelerating Neural Network Training: An Analysis of the AlgoPerf Competition*. arXiv preprint arXiv:2405.17095. [Link](https://arxiv.org/abs/2405.17095){:target="_blank"}
 
-**[5]** Défossez, A., Bottou, L., Bach, F., & Usunier, N. (2022). *A simple convergence proof of Adam and Adagrad*. Transactions on Machine Learning Research (TMLR). [Link](https://arxiv.org/abs/2003.02395)
+5. **Schneider et al., 2019:** Frank Schneider, Lukas Balles, and Philipp Hennig. (2019). *DeepOBS: A Deep Learning Optimizer Benchmark Suite*. International Conference on Learning Representations (ICLR). [Link](https://arxiv.org/abs/1903.05499){:target="_blank"}
 
-**[6]** Zhang, G., Li, L., Nado, Z., Martens, J., Sachdeva, S., Dahl, G., Shallue, C., & McAllester, D. (2019). *Which algorithmic choices matter at which batch sizes? Insights from a noisy quadratic model*. Advances in Neural Information Processing Systems (NeurIPS). [Link](https://arxiv.org/abs/1907.04164)
-
-**[7]** Choi, D., Shallue, C. J., Nado, Z., Lee, J., Maddison, C. J., & Dahl, G. E. (2020). *On empirical comparisons of optimizers for deep learning*. International Conference on Learning Representations (ICLR). [Link](https://arxiv.org/abs/1910.05446)
+6. **Wilson et al., 2017:** Ashia C. Wilson, Rebecca Roelofs, Mitchell Stern, Nathan Srebro, and Benjamin Recht. (2017). *The Marginal Value of Adaptive Gradient Methods in Machine Learning*. Advances in Neural Information Processing Systems (NeurIPS) 30. [Link](https://proceedings.neurips.cc/paper_files/paper/2017/hash/81b3833e2504647f9d794f7d7b9bf341-Abstract.html){:target="_blank"}

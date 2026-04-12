@@ -41,11 +41,8 @@ title: Table of Contents
 
 Some 2025 content below; yet to be deleted.
 
-[9. Adaptive Optimization Methods](section/9/notes.md) | [Notebook](https://colab.research.google.com/github/damek/STAT-4830/blob/main/section/9/notebook.ipynb) | [Cheatsheet](section/9/cheatsheet.md)
-   > Intro to adaptive optimization methods: Adagrad, Adam, and AdamW.
-
-[10. Benchmarking Optimizers: Challenges and Some Empirical Results](section/10/notes.md) | [Cheatsheet](section/10/cheatsheet.md)
-   > How do we compare optimizers for deep learning? 
+[9. Benchmarking Optimizers](section/9/notes.md)
+   > How to compare optimizers fairly: time-to-result, why tuning is inseparable from the optimizer, and the AlgoPerf benchmark.
 
 [11. A Playbook for Tuning Deep Learning Models](section/11/notes.md) | [Cheatsheet](section/11/cheatsheet.md)
    > A systematic process for [tuning deep learning models](https://github.com/google-research/tuning_playbook)
