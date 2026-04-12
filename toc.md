@@ -5,7 +5,7 @@ title: Table of Contents
 
 # Table of Contents
 
-[2025 version of the course](archive/2025/toc.md)
+[Looking for the 2025 version? It's archived here.](archive/2025/toc.md)
 
 <a id="export-lectures" href="#">Export lectures to markdown</a>
 
