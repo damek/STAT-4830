@@ -39,13 +39,13 @@ title: Table of Contents
 [9. Benchmarking Optimizers](section/9/notes.md)
    > How to compare optimizers fairly: time-to-result, why tuning is inseparable from the optimizer, and the AlgoPerf benchmark.
 
+[10. The Tuning Playbook](section/10/notes.md)
+   > Systematic hyperparameter tuning: scientific/nuisance/fixed roles, search methods, batch size, training duration, and the Google tuning playbook.
+
    
 ---
 
 Some 2025 content below; yet to be deleted.
-
-[11. A Playbook for Tuning Deep Learning Models](section/11/notes.md) | [Cheatsheet](section/11/cheatsheet.md)
-   > A systematic process for [tuning deep learning models](https://github.com/google-research/tuning_playbook)
 
 [12. Scaling Transformers: Parallelism Strategies from the Ultrascale Playbook](section/12/notes.md) | [Cheatsheet](section/12/cheatsheet.md)
    > How do we scale training of transformers to 100s of billions of parameters?

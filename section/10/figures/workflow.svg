@@ -1,0 +1,181 @@
+<svg width="960" height="820" xmlns="http://www.w3.org/2000/svg" font-family="Arial, sans-serif" font-size="11">
+  <defs>
+    <marker id="arrowhead-v4" markerWidth="10" markerHeight="7" refX="9.5" refY="3.5" orient="auto" markerUnits="strokeWidth">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#333" />
+    </marker>
+    <style>
+      .box { fill: #ffffff; stroke: #333; stroke-width: 1.2; }
+      .decision { fill: #e8f8e8; stroke: #333; stroke-width: 1.2; } /* Light green */
+      .final { fill: #e8e8f8; stroke: #333; stroke-width: 1.2; } /* Light blue */
+      .connector { fill: none; stroke: #333; stroke-width: 1.2; marker-end: url(#arrowhead-v4); }
+      .feedback { fill: none; stroke: #666; stroke-width: 1.2; marker-end: url(#arrowhead-v4); stroke-dasharray: 4,4; }
+      .label { fill: #444; font-size: 10px; text-anchor: middle; }
+      .text-block { text-anchor: middle; dominant-baseline: middle; font-size: 11px; fill: #222;} /* Changed baseline */
+      .text-block .title { font-weight: bold; font-size: 11.5px; }
+      .text-block .details { font-size: 9.5px; fill: #444; }
+    </style>
+  </defs>
+
+  <!-- Define Box Coordinates and Dimensions (Hardcoded based on layout) -->
+  <!-- Constants -->
+  <variable id="boxWidth" value="210"/> <!-- Keep for reference -->
+  <variable id="hGap" value="100"/>
+  <variable id="vGap" value="30"/>
+  <variable id="startY" value="40"/>
+  <variable id="startX1" value="40"/>
+  <variable id="startX2" value="370"/> <!-- Adjusted for gap -->
+  <variable id="startX3" value="700"/> <!-- Adjusted for gap -->
+
+  <!-- Calculated Y positions -->
+  <variable id="row1Y" value="40"/>
+  <variable id="row1H" value="65"/>
+  <variable id="row2Y" value="{row1Y + row1H + vGap + 10}"/> <!-- 145 -->
+  <variable id="row2H" value="75"/>
+  <variable id="row3Y" value="{row2Y + row2H + vGap + 30}"/> <!-- 280 -->
+  <variable id="row3H1" value="65"/> <!-- Define Goal -->
+  <variable id="row3H2" value="90"/> <!-- Exploit Phase -->
+  <variable id="row4Y" value="{row3Y + row3H1 + vGap}"/> <!-- 375 -->
+  <variable id="row4H1" value="75"/> <!-- HP Roles -->
+  <variable id="row4H2" value="65"/> <!-- Final Model -->
+  <variable id="row5Y" value="{row4Y + row4H1 + vGap}"/> <!-- 480 -->
+  <variable id="row5H" value="75"/>
+  <variable id="row6Y" value="{row5Y + row5H + vGap}"/> <!-- 585 -->
+  <variable id="row6H" value="65"/>
+  <variable id="row7Y" value="{row6Y + row6H + vGap}"/> <!-- 680 -->
+  <variable id="row7H" value="90"/>
+  <variable id="row8Y" value="{row7Y + row7H + vGap}"/> <!-- 800 -->
+  <variable id="row8H1" value="75"/> <!-- Decision -->
+  <variable id="row8H2" value="65"/> <!-- Update Baseline -->
+
+
+  <!-- Row 1 -->
+  <rect id="start" x="40" y="40" width="210" height="65" class="box" rx="8" ry="8"/>
+  <text x="145" y="72.5" class="text-block"> <!-- y = 40 + 65/2 -->
+    <tspan x="145" dy="-0.6em" class="title">START PROJECT</tspan>
+    <tspan x="145" dy="1.3em" class="details">(Sec 2: Arch, Opt, BS)</tspan>
+  </text>
+
+  <rect id="baseline" x="370" y="40" width="210" height="65" class="box" rx="8" ry="8"/>
+  <text x="475" y="72.5" class="text-block"> <!-- y = 40 + 65/2 -->
+    <tspan x="475" dy="-0.6em" class="title">Establish Initial Baseline</tspan>
+    <tspan x="475" dy="1.3em" class="details">(Sec 2.4: Simple, Reasonable)</tspan>
+  </text>
+
+  <!-- Row 2 -->
+  <rect id="ready" x="370" y="145" width="210" height="75" class="decision" rx="8" ry="8"/>
+   <text x="475" y="182.5" class="text-block"> <!-- y = 145 + 75/2 -->
+     <tspan x="475" dy="-1.3em" class="title">Ready for Exploitation?</tspan>
+     <tspan x="475" dy="1.3em" class="details">(Sec 3.2, Playbook:</tspan>
+     <tspan x="475" dy="1.2em" class="details">"After exploration concludes")</tspan>
+  </text>
+
+  <!-- Row 3 -->
+   <rect id="define_goal" x="40" y="280" width="210" height="65" class="box" rx="8" ry="8"/>
+   <text x="145" y="312.5" class="text-block"> <!-- y = 280 + 65/2 -->
+    <tspan x="145" dy="-0.6em" class="title">Define GOAL for Next Round</tspan>
+    <tspan x="145" dy="1.3em" class="details">(Sec 3.3: Narrow, Specific)</tspan>
+  </text>
+
+  <rect id="exploit_phase" x="700" y="280" width="210" height="90" class="box" rx="8" ry="8"/>
+  <text x="805" y="325" class="text-block"> <!-- y = 280 + 90/2 -->
+    <tspan x="805" dy="-1.9em" class="title">Final Exploitation Phase</tspan>
+    <tspan x="805" dy="1.3em" class="details">- Refine Search Space</tspan>
+    <tspan x="805" dy="1.2em" class="details">- Use Bayesian Opt.</tspan>
+    <tspan x="805" dy="1.2em" class="details">- Maximize Perf.</tspan>
+  </text>
+
+  <!-- Row 4 -->
+  <rect id="hp_roles" x="40" y="375" width="210" height="75" class="box" rx="8" ry="8"/>
+   <text x="145" y="412.5" class="text-block"> <!-- y = 375 + 75/2 -->
+    <tspan x="145" dy="-1.3em" class="title">Identify HP Roles for Goal</tspan>
+    <tspan x="145" dy="1.3em" class="details">(Sec 3.3: Scientific, Nuisance,</tspan>
+    <tspan x="145" dy="1.2em" class="details">Fixed)</tspan>
+  </text>
+
+   <rect id="final_model" x="700" y="405" width="210" height="65" class="final" rx="8" ry="8"/> <!-- Adjusted Y -->
+   <text x="805" y="437.5" class="text-block"> <!-- y = 405 + 65/2 -->
+     <tspan x="805" class="title">FINAL MODEL</tspan>
+   </text>
+
+  <!-- Row 5 -->
+  <rect id="design_studies" x="40" y="480" width="210" height="75" class="box" rx="8" ry="8"/>
+  <text x="145" y="517.5" class="text-block"> <!-- y = 480 + 75/2 -->
+    <tspan x="145" dy="-1.3em" class="title">Design Studies</tspan>
+    <tspan x="145" dy="1.3em" class="details">(Sec 3.4: Search Space/Method)</tspan>
+    <tspan x="145" dy="1.2em" class="details">(Tune Nuisance HPs)</tspan>
+  </text>
+
+  <!-- Row 6 -->
+   <rect id="run_exps" x="40" y="585" width="210" height="65" class="box" rx="8" ry="8"/>
+   <text x="145" y="617.5" class="text-block"> <!-- y = 585 + 65/2 -->
+    <tspan x="145" dy="-0.6em" class="title">Run Experiments (Trials)</tspan>
+     <tspan x="145" dy="1.3em" class="details"></tspan>
+  </text>
+
+  <!-- Row 7 -->
+   <rect id="analyze" x="40" y="680" width="210" height="90" class="box" rx="8" ry="8"/>
+   <text x="145" y="725" class="text-block"> <!-- y = 680 + 90/2 -->
+    <tspan x="145" dy="-2.0em" class="title">Analyze Results (Insight)</tspan>
+    <tspan x="145" dy="1.3em" class="details">(Sec 3.5: Check Bounds/Curves)</tspan>
+    <tspan x="145" dy="1.2em" class="details">(Use Isolation Plots, Fig 4)</tspan>
+    <tspan x="145" dy="1.2em" class="details">(Address Goal)</tspan>
+  </text>
+
+  <!-- Row 8 -->
+   <rect id="decision_adopt" x="370" y="715" width="210" height="75" class="decision" rx="8" ry="8"/> <!-- Adjusted Y slightly -->
+   <text x="475" y="752.5" class="text-block"> <!-- y = 715 + 75/2 -->
+     <tspan x="475" dy="-1.3em" class="title">Decision: Adopt Change?</tspan>
+     <tspan x="475" dy="1.3em" class="details">(Sec 3.6: Improvement real?</tspan>
+     <tspan x="475" dy="1.2em" class="details">Worth complexity?)</tspan>
+  </text>
+
+  <rect id="update_baseline" x="700" y="720" width="210" height="65" class="box" rx="8" ry="8"/> <!-- Adjusted Y slightly -->
+  <text x="805" y="752.5" class="text-block"> <!-- y = 720 + 65/2 -->
+    <tspan x="805" dy="-0.6em" class="title">Update Baseline Config</tspan>
+     <tspan x="805" dy="1.3em" class="details"></tspan>
+  </text>
+
+  <!-- Connectors -->
+  <line x1="250" y1="72.5" x2="370" y2="72.5" class="connector"/> <!-- Start -> Baseline -->
+  <line x1="475" y1="105" x2="475" y2="145" class="connector"/> <!-- Baseline -> Ready? -->
+
+  <!-- Loop Back (Exploration) -->
+  <path d="M 370 182.5 L 250 182.5 L 250 312.5 L 250 312.5" class="connector"/> <!-- Straight line across, then down -->
+  <line x1="250" y1="312.5" x2="250" y2="312.5" class="connector"/> <!-- Connect to box -->
+  <text x="310" y="177.5" class="label">NO (Explore)</text>
+
+  <!-- Exploration Path Down -->
+  <line x1="145" y1="345" x2="145" y2="375" class="connector"/> <!-- Goal -> HP Roles -->
+  <line x1="145" y1="450" x2="145" y2="480" class="connector"/> <!-- HP Roles -> Design Studies -->
+  <line x1="145" y1="555" x2="145" y2="585" class="connector"/> <!-- Design Studies -> Run Exps -->
+  <line x1="145" y1="650" x2="145" y2="680" class="connector"/> <!-- Run Exps -> Analyze -->
+  <line x1="145" y1="770" x2="370" y2="752.5" class="connector"/> <!-- Analyze -> Decision -->
+
+  <!-- Decision YES Path -->
+  <line x1="580" y1="752.5" x2="700" y2="752.5" class="connector"/>
+  <text x="640" y="742.5" class="label">YES</text>
+
+  <!-- Main Loop Back from Update Baseline -->
+  <path d="M 805 785 L 805 805 L 20 805 L 20 182.5 L 370 182.5" class="connector"/>
+
+  <!-- Decision NO Path -->
+   <path d="M 370 752.5 L 300 752.5 L 300 192.5 L 370 192.5" class="connector"/>
+   <text x="335" y="737.5" class="label">NO</text>
+
+  <!-- Ready? YES Path -->
+  <line x1="580" y1="182.5" x2="700" y2="312.5" class="connector"/>
+   <text x="640" y="210" class="label">YES</text>
+
+  <!-- Exploitation to Final -->
+  <line x1="805" y1="370" x2="805" y2="405" class="connector"/>
+
+  <!-- Feedback loops -->
+  <path d="M 250 725 C 320 725, 320 627.5, 250 627.5" class="feedback"/>
+  <text x="300" y="670" class="label" text-anchor="start">Revise Study Design?</text>
+  <text x="300" y="685" class="details" text-anchor="start">(Bounds Hit, Issues Found)</text>
+
+  <path d="M 250 617.5 C 320 617.5, 320 527.5, 250 527.5" class="feedback"/>
+   <text x="300" y="565" class="label" text-anchor="start">Needs More Trials?</text>
+   <text x="300" y="580" class="details" text-anchor="start">(Low Sampling Density)</text>
+
+</svg>

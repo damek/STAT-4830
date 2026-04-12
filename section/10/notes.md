@@ -1,138 +1,198 @@
 ---
 layout: course_page
-title: Benchmarking Optimizers - Challenges and Some Empirical Results
+title: The tuning playbook
 ---
 
-# Benchmarking Optimizers: Challenges and Some Empirical Results
+# 10. The tuning playbook
 
-[Cheat Sheet](cheatsheet.md)
-
-[YouTube Presentation on AlgoPerf](https://www.youtube.com/watch?v=_yX1ItxReLY)
+[Deep Learning Tuning Playbook (GitHub)](https://github.com/google-research/tuning_playbook){:target="_blank"}
 
 ## Table of contents
-1. [Introduction: The Optimizer Comparison Problem](#introduction-the-optimizer-comparison-problem)
-2. [Challenge 1: Defining and Measuring Speed](#challenge-1-defining-and-measuring-speed)
-3. [Challenge 2: The Hyperparameter Tuning Trap](#challenge-2-the-hyperparameter-tuning-trap)
-4. [A Solution: Rigorous Benchmarking Principles](#a-solution-rigorous-benchmarking-principles)
-5. [What We Learned: AlgoPerf Competition Results](#what-we-learned-algoperf-competition-results)
-6. [Conclusion](#conclusion)
+1. [From benchmarking to tuning](#1-from-benchmarking-to-tuning)
+2. [Starting point](#2-starting-point)
+3. [Hyperparameter roles](#3-hyperparameter-roles)
+4. [Search methods](#4-search-methods)
+5. [Checking your work](#5-checking-your-work)
+6. [Batch size](#6-batch-size)
+7. [Training duration](#7-training-duration)
+8. [Takeaways](#8-takeaways)
 
-## Introduction: The Optimizer Comparison Problem
+## 1. From benchmarking to tuning
 
-In previous lectures, we studied several optimization algorithms commonly used in machine learning. We started with Stochastic Gradient Descent (SGD) for a simple mean estimation problem in Lecture [6](../6/notes.md). We then analyzed SGD, Momentum, Exponential Moving Average (EMA), and Preconditioning using the Noisy Quadratic Model (NQM) in Lecture [7](../7/notes.md). Finally, Lecture [9](../9/notes.md) introduced adaptive methods like Adagrad, Adam, and AdamW. These lectures studied training methods on simplified problems. But how do these optimizers compare in practice when training complex deep learning models?
+In [Lecture 9](../9/notes.md) we showed that you can't evaluate an optimizer without specifying the tuning protocol. The tuning protocol is part of the algorithm. If you compare Adam to SGD without tuning both carefully, your comparison is meaningless.
 
-Determining which optimizer is "better" or "faster" for deep learning tasks is difficult. Simple approaches, like comparing final loss values or visually inspecting training loss curves, often provide misleading conclusions. The reasons for this difficulty are multifaceted and involve how we define speed, how algorithms interact with specific problems, and how hyperparameters are selected.
+So what does a good tuning protocol actually look like? How do you tune a deep learning model? Not just the optimizer, but the architecture, the regularization, the schedule, everything.
 
-Our theoretical analyses hinted at some complexities. We saw how SGD with a constant learning rate converges to a region around the optimum due to gradient noise (Lecture 6). The NQM highlighted how problem conditioning (the ratio of largest to smallest curvature, $\kappa = h_1/h_2$) affects convergence rates and how different methods address this (Lecture 7). While these theoretical models are instructive, they do not capture the full complexity of comparing optimizers on large-scale, non-convex deep learning problems.
+Most people just try stuff. Change the learning rate, see if it helps. Add dropout, see if it helps. Increase the model size, see if it helps. There's no structure, no way to know if the thing you tried actually helped or if you just got lucky.
 
-This lecture explores the challenges of empirically comparing optimizers. We will first examine the difficulty in precisely defining and measuring optimization speed. Second, we will investigate the crucial role of hyperparameter tuning protocols, showing how they can drastically alter comparison outcomes. Third, we will introduce the principles of rigorous benchmarking as a solution, using the AlgoPerf benchmark (Dahl et al., 2023) as a case study. Finally, we will discuss concrete results from recent benchmark evaluations (Choi et al., 2019b; Kasimbeg et al., 2024) to understand the current landscape of optimizer performance.
+The [Deep Learning Tuning Playbook](https://github.com/google-research/tuning_playbook){:target="_blank"} from Google (Godbole et al., 2023) lays out a process for doing this systematically. It's all common sense, but it's common sense that most people don't follow. This lecture walks through the key ideas.
 
-## Challenge 1: Defining and Measuring Speed
+## 2. Starting point
 
-A fundamental challenge in comparing optimizers is defining what it means for one to be "faster" than another. A common approach is to plot a performance metric, like validation loss, against training time or steps for different optimizers. However, these curves often intersect, sometimes multiple times during training. One optimizer might show faster initial improvement, while another might achieve a better final result or converge more quickly later in training. This makes it difficult to declare a definitive winner based solely on the shape of the training curves.
+You've picked an optimizer (say AdamW, because that's what people use for your problem). You have a model architecture, a dataset, and a GPU. You have a training loop.
 
-Figure 1 from Dahl et al. (2023) illustrates this problem. The plot on the left shows validation error curves from two distinct training runs using the same optimizer and task. The curves clearly cross, making it ambiguous which run is "faster" overall. The plot on the right shows the best validation error achieved up to that point in training (the running minimum) for the same two runs. Even using this metric, which smooths out some noise, the curves still intersect, indicated by the red crosses. This shows that determining which run performs better depends on when you stop training.
+Before you start tuning, you need a baseline.
 
-> **Figure 1 (from Dahl et al., 2023):**
-> ![Optimizer Comparison Curves](figures/dahl_fig1.png)
-> *Caption Quote:* "Figure 1: A direct comparison of training curves is ill-posed if they intersect. Left: The validation error for two different runs... Right: The best validation error obtained so far by each curve... the curves intersect multiple times (highlighted by red crosses (✖) at the bottom of each plot)." (Dahl et al., 2023, p. 10)
+The playbook says: start simple. Pick a standard architecture for your problem. Use default optimizer settings. Use a constant learning rate. Train for a reasonable number of steps.
 
-To overcome this ambiguity, a standard approach is to measure *Time-to-Result*. This involves pre-defining a specific *target* performance value for a relevant evaluation metric (e.g., target validation accuracy or test error rate). The performance of an optimizer on a given workload is then measured by the time (or number of steps, under controlled conditions) required to *first reach this target value*. This method provides a single, unambiguous number for comparison, assuming the target is achievable by the optimizers being compared (Dahl et al., 2023, Sec 4.1). It shifts the focus from the entire trajectory to a specific, meaningful milestone.
+The goal is not a good model. The goal is a model that is clearly better than random, that trains without crashing, and that gives you a starting point you can improve from. Starting with something intentionally simple means you're not fighting complexity from day one. For example, start with a constant learning rate before exploring cosine decay, and start with a smaller model before scaling up.
 
-## Challenge 2: The Hyperparameter Tuning Trap
+Once you have that, you can start improving it systematically. The key word is *systematically*: the playbook's core idea is to treat tuning as a series of experiments, not random exploration.
 
-Beyond defining speed, perhaps the most significant challenge in comparing optimizers is handling*hyperparameter tuning. Optimizers like SGD, Adam, or Momentum are not fully specified algorithms but rather templates that require setting hyperparameters, such as learning rate, momentum coefficients ($\beta_1, \beta_2$), epsilon ($\epsilon$), weight decay ($\lambda$), and learning rate schedule parameters. The performance of an optimizer depends heavily on these choices. Crucially, as Choi et al. (2019b) argue, the *process* used to select these hyperparameters—the tuning protocol—can dramatically influence which optimizer appears superior.
+## 3. Hyperparameter roles
 
-To understand this formally, Choi et al. (2019b, Def 1) introduce the concept of *optimizer inclusion*. An optimizer M is considered a subset or specialization of another optimizer N (denoted $M \subseteq N$) if N can exactly replicate the behavior of M by setting some of its hyperparameters to specific fixed values. For instance, SGD is a subset of Momentum ($SGD \subseteq Momentum$) because Momentum behaves identically to SGD if its momentum coefficient is set to zero. Theoretically, if we had an infinite budget to find the absolute best hyperparameters for both M and N on a given task, the more general optimizer N should never perform worse than its specialization M.
+Here's the framework. Each tuning round is an experiment with a single question:
 
-However, practical hyperparameter tuning always operates under limited budgets. We typically cannot afford to run thousands of trials to find the perfect settings. The critical question then becomes: does this theoretical inclusion relationship hold when using realistic, finite tuning budgets (e.g., 20, 50, or 100 trials)? Early empirical studies sometimes suggested it did not, finding, for example, that simpler methods occasionally outperformed more complex ones like Adam (Wilson et al., 2017).
+- "Does adding weight decay help?"
+- "What's the best learning rate for this architecture?"
+- "Should I use cosine decay or a constant learning rate?"
 
-Choi et al. (2019b) investigated this discrepancy directly. They showed that previous results suggesting Adam underperformed Momentum were often due to insufficient tuning protocols. Specifically, if only the learning rate was tuned for both algorithms, Adam might appear worse. However, when additional relevant hyperparameters (like Adam's $\epsilon$ or momentum coefficients) were also tuned using a consistent, fair procedure and budget for both optimizers, the performance differences vanished or even aligned with the theoretical inclusion hierarchy.
+One question per round. If you try to answer multiple questions at once, you can't tell what caused what.
 
-> **Figure 3 (from Choi et al., 2019b):**
-> ![Tuning Reverses Rankings 1](figures/choi_fig3.png)
-> *Caption Quote:* "Figure 3: Tuning more hyperparameters removes the differences in test error between optimizers observed by Wilson et al. (2017). Tuning a subset of optimizer hyperparameters and the initial learning rate is sufficient to equalize performance between all optimizers (left). More extensive hyperparameter tuning in our setup... improves results for all optimizers and still does not produce any differences between optimizer performances (right)." (Choi et al., 2019b, p. 7)
+Within each round, every hyperparameter gets one of three roles:
 
-Figure 3 from Choi et al. (2019b) illustrates this finding. The left panel replicates conditions similar to earlier work where limited tuning suggested Adam performed worse than Momentum. The right panel shows that with more comprehensive tuning applied fairly to both optimizers, their performance becomes comparable, contradicting the initial conclusion.
+**Scientific hyperparameters** are what you're investigating. This is the thing you vary to answer your question. For example, "weight decay on vs. off" or "learning rate in $[10^{-4}, 10^{-2}]$."
 
-Figure 4 from Choi et al. (2019b) provides further evidence across different workloads and another comparison baseline (Schneider et al., 2019). It shows how the relative ranking of SGD, Momentum, and Adam changes significantly depending on which set of hyperparameters are included in the tuning search space. The rankings only stabilize and become consistent with the inclusion hierarchy ($SGD \subseteq Momentum \subseteq Adam$-variants) when the tuning protocol is sufficiently comprehensive.
+**Nuisance hyperparameters** are things that aren't your focus but that need to be tuned to make the comparison fair. As we saw in [Lecture 9](../9/notes.md), if you compare two settings without tuning nuisance hyperparameters for each, the comparison is meaningless. For example, if you're testing whether to add weight decay, the learning rate is a nuisance parameter: the optimal learning rate might be different with and without weight decay. You need to tune it separately for each setting of the scientific hyperparameter.
 
-> **Figure 4 (from Choi et al., 2019b):**
-> ![Tuning Reverses Rankings 2](figures/choi_fig4.png)
-> *Caption Quote:* "Figure 4: Tuning more hyperparameters changes optimizer rankings from Schneider et al. (2019) to rankings that are consistent with the inclusion relationships. The leftmost columns for each workload reproduce the rankings from Schneider et al. (2019), while the remaining columns tune over increasingly general search spaces." (Choi et al., 2019b, p. 8)
+**Fixed hyperparameters** are things you hold constant for this round. This simplifies the experiment, but your conclusions only apply for those fixed values. For example, you might fix the architecture and only study optimizer settings.
 
-The conclusion from these results (Choi et al., 2019b, Sec 4.3/5) is that the *tuning protocol is not external to the optimizer; it is an essential part of the algorithm's definition for empirical comparison.* This includes the hyperparameter *search space* considered, the *tuning budget* (number of trials allowed), and the *method* used to sample from the space. Comparing optimizers without explicitly stating and controlling for these aspects of the tuning protocol is fundamentally unreliable and likely to produce results that depend more on the protocol choices than on the optimizers themselves.
+The role of a hyperparameter is not intrinsic to it. It depends on the question you're asking in that round. The learning rate might be scientific in one round ("what's the best learning rate?"), nuisance in another ("does weight decay help, after re-tuning the learning rate?"), and fixed in a third ("which activation function works best, holding everything else constant?").
 
-## Benchmarking Principles
+This framework is directly connected to what we learned in [Lecture 9](../9/notes.md). The reason optimizer comparisons go wrong is that people don't handle nuisance hyperparameters properly. The playbook generalizes this idea beyond optimizer comparisons to all of model development.
 
-The challenges outlined—ambiguity in measuring speed, dependence on workload specifics, and sensitivity to hyperparameter tuning protocols—necessitate a standardized approach for comparing optimizers. Without a common framework, drawing reliable conclusions about which algorithms offer genuine improvements is nearly impossible. Rigorous, competitive benchmarks provide a potential solution by establishing clear rules for evaluation.
+### 3.1 The incremental strategy
 
-The **AlgoPerf: Training Algorithms** benchmark (Dahl et al., 2023) represents one such effort to create a framework for systematically comparing neural network training algorithms. Its design incorporates several principles aimed directly at addressing the previously discussed challenges.
+You start from your baseline. You run one experiment. If the change helps, you adopt it as the new baseline. If it doesn't, you discard it. Then you run the next experiment starting from the current baseline. One change at a time, each justified by evidence.
 
-First, AlgoPerf uses the **Time-to-Result** metric (Dahl et al., 2023, Sec 4.1). For each task, or "workload," the benchmark defines specific target values for evaluation metrics (like validation error). A submission's performance on that workload is measured as the wall-clock time taken to first reach the target.
+The playbook calls adopting a new baseline a "launch." The final model configuration should be the result of a series of launches, each backed by experimental evidence. This is the opposite of the common practice of making several changes at once and hoping the combination works.
 
-Second, to make wall-clock time measurements meaningful, comparisons must occur on **Standardized Hardware** (Dahl et al., 2023, Sec 4.1.2). AlgoPerf specifies a fixed hardware configuration (e.g., a specific type and number of GPUs) on which all official timing runs must be performed. This controls for variations in computational power.
+A useful distinction: most of the tuning process should focus on *exploration* (gaining insight into which hyperparameters matter and how they interact) rather than *exploitation* (squeezing out the last bit of validation performance). Save greedy optimization for the end, once you understand the problem well enough to know where to look.
 
-Third, the benchmark includes a **Workload Suite** covering diverse tasks (e.g., image classification, speech recognition, machine translation) to assess the general applicability of an algorithm (Dahl et al., 2023, Sec 4.3). It uses a set of *fixed base workloads*, known to participants, for the primary timing measurements. It also incorporates *randomized held-out workload variants*, sampled after submissions are finalized, to test robustness and discourage overfitting the algorithm design to the specific base workloads.
+## 4. Search methods
 
-Fourth, AlgoPerf aims to **Isolate the Training Algorithm** from other parts of the training pipeline (Dahl et al., 2023, Sec 4.2, 4.2.1). It defines a specific Application Programming Interface (API) consisting of functions that a submission must implement (e.g., for updating parameters, initializing optimizer state, selecting data batches). The benchmark system controls the model architecture, data processing, and evaluation logic; submissions can only modify the parts directly related to the training algorithm strategy.
+Within each study, you need to search over the nuisance hyperparameters. There are several approaches, and the choice matters.
 
-Fifth, addressing the critical issue identified in Section 3, AlgoPerf mandates **Explicit Tuning Rulesets** (Dahl et al., 2023, Sec 4.4). Submissions must compete under one of two predefined procedures for handling hyperparameters:
-*   The *External Tuning* ruleset simulates having a limited parallel compute budget for tuning. Submissions provide a hyperparameter search space. The benchmark performs a fixed number of trials (e.g., 5 studies of 5 trials each in the competition described by Kasimbeg et al., 2024) sampling from this space and scores the submission based on the time-to-result achieved by the single best trial found within that budget.
-*   The *Self-Tuning* ruleset allows no external tuning. The algorithm must be hyperparameter-free or perform any necessary tuning autonomously *during* the timed training run. These submissions are given a larger runtime budget to accommodate potential internal tuning overhead.
+### 4.1 Grid search
 
-Sixth, since performance is measured across multiple workloads, the benchmark requires a method for **Aggregate Scoring** (Dahl et al., 2023, Sec 4.5). AlgoPerf uses *Performance Profiles*, based on Dolan and Moré (2002), to visualize and summarize performance across the entire workload suite.
+You pick a set of values for each hyperparameter and try every combination. The problem: the number of combinations grows exponentially with the number of hyperparameters. 3 hyperparameters with 5 values each gives you 125 trials. 5 hyperparameters gives you 3,125 trials. This gets expensive fast.
 
-A performance profile provides a way to compare multiple submissions simultaneously. The x-axis represents a slowdown factor $\tau$ (where $\tau \ge 1$), indicating how much slower a submission is compared to the *fastest* submission on any given workload. The y-axis shows the fraction (or percentage) of workloads for which the submission successfully reached the target within that slowdown factor $\tau$. Figure 1(b, d) from Kasimbeg et al. (2024) shows an example for the external tuning ruleset. A point $(\tau, y)$ on a submission's line means it solved fraction $y$ of the workloads in at most $\tau$ times the runtime of the best submission for each respective workload. Therefore, optimizers whose lines are higher and further to the left are generally better; they solve more problems faster relative to the best known performance.
+Worse, most of those combinations are wasted. If only 2 of your 5 hyperparameters actually matter, a grid still forces you to try every combination of the other 3, which doesn't tell you anything useful.
 
-> **Figure 1 (from Kasimbeg et al., 2024):**
-> ![AlgoPerf Competition Results](figures/kasimbeg_fig1.png)
-> *Caption Quote:* "Figure 1: ALGOPERF competition leaderboard & performance profiles for all submissions to the external (top) and self-tuning (bottom) ruleset. The leaderboards (a, c) are ranked by the submissions’ benchmark scores... Higher scores indicate faster training... Note, scores are not comparable between rulesets. In the performance profiles (b, d), each line represents a submission. A step at τ indicates that, for one workload, this submission reaches the target within τ times the runtime of the fastest submission for that workload and ruleset." (Kasimbeg et al., 2024, p. 4)
+### 4.2 Random search
 
-By incorporating these principles—time-to-result, fixed hardware, diverse workloads, API isolation, explicit tuning rules, and aggregate reporting via performance profiles—benchmarks like AlgoPerf aim to provide a more reliable and informative basis for comparing neural network training algorithms.
+You sample hyperparameter values randomly from specified ranges. Bergstra and Bengio (2012) showed that random search is more efficient than grid search for hyperparameter optimization. The key insight: for most problems, only a few hyperparameters really matter. A grid wastes most of its budget on exact combinations of the unimportant ones. Random search, by contrast, gives you a different value of every hyperparameter on every trial, so you effectively see more distinct values of the ones that matter.
 
+### 4.3 Quasi-random search
 
-## What Was Learned: AlgoPerf Competition Results
+Like random search, but the points are chosen to cover the space more uniformly using [low-discrepancy sequences](https://en.wikipedia.org/wiki/Low-discrepancy_sequence){:target="_blank"} (e.g., [Sobol sequences](https://en.wikipedia.org/wiki/Sobol_sequence){:target="_blank"}). Regular random search can produce clumps and gaps by chance. Quasi-random search avoids this by construction, guaranteeing that the points spread out evenly across the search space.
 
-The benchmarking principles described in Section 4 were applied in the first AlgoPerf: Training Algorithms competition. The analysis of this competition by Kasimbeg et al. (2024) provides concrete results on the relative performance of various modern optimization strategies under a controlled framework.
+The playbook recommends quasi-random search during the exploration phase for three reasons: it gives uniform coverage of the space, it doesn't adapt to a specific objective (so you can do flexible post-hoc analysis, like re-analyzing results for a different metric), and it's easy to implement.
 
-Figure 1 summarizes the main outcomes of the competition. Parts (a) and (c) display the final leaderboards for the External Tuning and Self-Tuning rulesets, respectively, ranked by an aggregate benchmark score where higher values indicate better average performance across workloads. Parts (b) and (d) show the corresponding performance profiles, visualizing the trade-off between speed and the fraction of workloads solved. The results clearly differentiate the submitted algorithms, with distinct winners emerging in each ruleset: PYTORCH DISTRIBUTED SHAMPOO led the External Tuning leaderboard, while SCHEDULE FREE ADAMW won the Self-Tuning category. There are noticeable performance gaps between submissions in both rulesets.
+### 4.4 Bayesian optimization
 
-One key finding relates to advanced preconditioning methods. The winning submission in the External Tuning ruleset utilized Distributed Shampoo, an algorithm employing non-diagonal preconditioning. Kasimbeg et al. (2024, Sec 3) report that this submission achieved approximately "28% faster model training compared to the baseline" (which used NadamW), averaged across the eight base workloads and measured in wall-clock time. This result suggests that, under the fair tuning conditions imposed by the benchmark, sophisticated preconditioning techniques can offer practical advantages over widely used adaptive methods like AdamW or NadamW.
+A sequential strategy. After each trial, you use all the results so far to build a model that predicts performance as a function of the hyperparameters. Then you use that model to decide what to try next, balancing between regions where the model predicts good performance and regions where the model is uncertain and there might be something better.
 
-Another significant result emerged from the Self-Tuning ruleset, which prohibits external hyperparameter tuning. The winning submission, based on Schedule Free AdamW, not only outperformed its baseline but was also competitive with externally tuned methods. Kasimbeg et al. (2024, Sec 3.2) state it was approximately "10% faster than the (external tuning) BASELINE across the seven base workloads both trained successfully." This demonstrates substantial progress in developing algorithms that require less manual tuning, moving closer to the goal of fully automated neural network training.
+This is more sample-efficient than random search because each trial is chosen to be maximally informative given what you've already observed. The downside is that it adapts to the objective, which means if you later want to re-analyze the results for a different metric or a different question, the sampling is biased toward what looked good under the original objective.
 
-Table 1 provides a detailed look at the performance of submissions across individual workloads, highlighting the importance of robustness. The table shows normalized runtimes, with gray cells indicating failures (timeout 'inf', errors 'NaN', or disqualification due to held-out workload issues denoted by † or ‡). Many submissions failed to reach the target reliably on all workloads. The winning submissions, while not always the absolute fastest on every task (compare bold entries vs. their rows), demonstrated strong performance *consistently* across the benchmark suite. This suggests that robustness and reliability across diverse tasks, rather than peak speed on a select few, were critical factors for achieving a high overall benchmark score.
+The playbook recommends Bayesian optimization for the final exploitation phase, when you've already narrowed the search space through exploration and just want to find the single best configuration within it.
 
-> **Table 1 (from Kasimbeg et al., 2024):**
-> ![AlgoPerf Per-Workload Runtimes](figures/kasimbeg_table1.png)
-> *Caption Quote:* "Table 1: Normalized submission runtimes across all workloads... fastest submission per workload... highlighted in bold. Workload runtimes considered infinite for scoring are marked in gray, with a (suffix) symbol explaining the reason. `inf` denotes that a submission did not reach the workload target... `NaN` indicates an error... A † indicates that a held-out score is ignored due to the submission not reaching the target on the corresponding base workload, while a ‡ indicates that a base workload score is ignored because the submission did not successfully train the associated held-out workload." (Kasimbeg et al., 2024, p. 5)
+## 5. Checking your work
 
-Finally, the process of running the AlgoPerf competition revealed practical lessons. Kasimbeg et al. (2024, Sec 4) note the substantial engineering effort required to ensure fair comparisons between implementations in different frameworks like JAX and PyTorch, emphasizing the need for functional equivalence and performant implementations. They also discuss methodological trade-offs in benchmark design, such as the computational cost versus the robustness-testing benefits of using held-out workloads (Kasimbeg et al., 2024, Sec 5.1).
+After running the trials in a study, you need to verify that the experiment actually worked before drawing conclusions. There are three things to check.
 
-## Conclusion
+### 5.1 Search space boundaries
 
-Comparing neural network training algorithms is challenging! As we have seen, simply observing loss curves is insufficient for determining which optimizer is faster due to intersecting trajectories (Section 2). Furthermore, optimizer performance is sensitive not only to the specific workload but also to the hyperparameter tuning protocol employed, including the search space, budget, and sampling method (Section 3). Results obtained without careful control and reporting of these tuning details are difficult to interpret reliably (Choi et al., 2019b).
+Plot the validation performance of each trial against each hyperparameter. If the best trials are clustered near the edge of your search range, your space is probably too small and the optimum might lie outside it.
 
-Standardized benchmarks, such as AlgoPerf (Dahl et al., 2023), are a structured approach to address these difficulties. By fixing workloads, hardware, evaluation metrics (time-to-result), and establishing explicit rules for hyperparameter tuning and API interactions, they provide a more rigorous foundation for empirical comparison (Section 4).
+![Bad search space](figures/bad_search_space.png)
 
-The central message derived from analyzing these challenges and benchmarking efforts is that **an optimizer cannot be evaluated in isolation from its tuning protocol.** For empirical comparisons to be meaningful, the method used to select hyperparameters must be considered an integral part of the algorithm's specification.
+*Figure 5.1: A suspicious search space. The best trials (lowest error) cluster near the upper boundary for the learning rate, suggesting the space needs expansion in that direction.*
 
-Results from the AlgoPerf competition suggest that this benchmark approach is feasible and can yield valuable insights (Kasimbeg et al., 2024). They provide evidence that advanced methods like non-diagonal preconditioning (Distributed Shampoo) and hyperparameter-free algorithms (Schedule Free AdamW) can offer practical advantages over standard methods when evaluated under fair, controlled conditions (Section 5). However, these results also underscore that no single optimizer dominates across all tasks and that robustness is key. Benchmarking is an ongoing effort, with continued refinement needed in areas like workload diversity and cost-efficiency.
+![Good search space](figures/good_search_space.png)
 
-For the field to progress effectively, empirical claims about new optimization methods should be supported by evaluations within rigorous benchmark frameworks. When direct benchmarking is not possible, researchers should provide comprehensive details of their experimental setup, including precise hyperparameter tuning protocols, to enable reliable comparisons.
+*Figure 5.2: An adequate search space. The best trials are well within the boundaries, suggesting the chosen range captures the optimum.*
+
+If you find that the best results are at the boundary, expand the search range in that direction and rerun the study. There's no point drawing conclusions from a study where you may not have found the actual optimum.
+
+### 5.2 Training curves
+
+Look at the training and validation curves for the best-performing trials:
+
+- **Overfitting:** If validation error starts increasing while training error keeps decreasing, you have an overfitting problem. You may need to add or strengthen regularization before you can trust comparisons between scientific hyperparameter values.
+- **High variance:** If validation error fluctuates significantly late in training, your comparisons may be unreliable. Consider reducing the learning rate, using Polyak averaging, or increasing the validation set size.
+- **Convergence:** If the model is still improving significantly at the final step, the training run might be too short. Conversely, if performance saturates early, you might be wasting compute.
+
+### 5.3 Isolation plots
+
+To answer your scientific question, make an **isolation plot**: for each value of the scientific hyperparameter, plot the best performance achieved after optimizing over the nuisance hyperparameters. This gives you an apples-to-apples comparison, because each point on the plot represents the best you could do with that scientific setting given fair tuning of everything else.
+
+![Isolation plot](figures/isolation_plot.png)
+
+*Figure 5.3: An isolation plot. Each point shows the best validation error achieved for a given value of the scientific hyperparameter (e.g., weight decay strength), after optimizing over nuisance hyperparameters (e.g., learning rate) for that value. This makes the comparison fair.*
+
+## 6. Batch size
+
+People commonly treat batch size as something to tune for model performance. The playbook says: don't.
+
+Batch size determines training speed and hardware utilization. It is not something you tune to improve validation accuracy. Shallue et al. (2018) showed this empirically: you can reach comparable validation performance across a wide range of batch sizes, provided you re-tune the learning rate and regularization for each batch size.
+
+The catch is that you *have to* re-tune. If you just double the batch size and keep the same learning rate, things will break. And the optimal learning rate does not follow simple scaling rules. People often claim you should scale the learning rate linearly or by the square root of the batch size, but Shallue et al. found that neither heuristic holds reliably.
+
+![Optimal LR scaling](figures/shallue_fig8c.png)
+
+*Figure 6.1 (from Shallue et al., 2018, Figure 8c): Optimal effective learning rates for ResNet-8 on CIFAR-10 as a function of batch size. The optimal learning rate deviates substantially from both linear and square-root scaling heuristics (dashed lines). You have to tune it, not apply a formula.*
+
+### 6.1 Batch size and training speed
+
+The relationship between batch size and training speed follows a characteristic pattern. Shallue et al. (2018) demonstrated this across multiple workloads.
+
+![Batch size scaling](figures/shallue_fig1c.png)
+
+*Figure 6.2 (from Shallue et al., 2018, Figure 1c): Steps to result vs. batch size for ResNet-8 on CIFAR-10. There is an initial period of perfect scaling (dashed line) where doubling the batch size halves the number of training steps. This is followed by diminishing returns, and eventually a region of maximal data parallelism where larger batches provide no further speedup.*
+
+Initially there is perfect scaling: double the batch size, halve the number of training steps needed. Then there are diminishing returns. Eventually you reach maximal data parallelism, where increasing the batch size provides no further reduction in training steps.
+
+### 6.2 Step budgets vs. epoch budgets
+
+One more subtlety: comparing batch sizes under a fixed epoch budget vs. a fixed step budget gives opposite conclusions.
+
+![Step vs epoch budget](figures/shallue_fig11a.png)
+
+*Figure 6.3 (from Shallue et al., 2018, Figure 11a): Best validation error under step budgets (left) vs. epoch budgets (right) for a Simple CNN on MNIST. Step budgets favor large batch sizes (more data per step), while epoch budgets favor small batch sizes (more gradient updates per epoch). The comparison depends entirely on how you measure compute.*
+
+Under a step budget, large batches look better because each step processes more data. Under an epoch budget, small batches look better because they get more gradient updates per pass through the data. This is another case where the evaluation protocol determines the conclusion, similar to what we saw with optimizer comparisons in [Lecture 9](../9/notes.md).
+
+The practical upshot: pick the largest batch size your hardware can handle efficiently, then re-tune everything else. Treat batch size as a property of your hardware setup, not a modeling decision.
+
+## 7. Training duration
+
+Don't tune the number of training steps as a hyperparameter within a study. Fix it.
+
+Use **retrospective checkpoint selection**: save model checkpoints periodically during training, and after the run is complete, select the checkpoint that achieved the best validation performance at any point during training.
+
+This is strictly better than just using the final checkpoint, which might be past the point of best validation performance (due to overfitting or other effects). It also avoids the need for early stopping heuristics, which require choosing thresholds and patience parameters that are themselves hyperparameters you'd need to tune.
+
+The number of training steps you fix should be chosen based on practical constraints and adjusted between rounds of experiments. If the best checkpoint is consistently near the end of the training run, you probably need to train longer. If it's consistently near the beginning, you're wasting compute and can shorten the runs. The optimal training duration can also change as you modify the model or training pipeline (for example, adding data augmentation often increases the number of steps needed for the model to converge).
+
+## 8. Takeaways
+
+1. **Treat tuning as a scientific experiment.** One question per round. Classify hyperparameters as scientific, nuisance, or fixed. This is the same principle that makes optimizer comparisons go wrong when people ignore it ([Lecture 9](../9/notes.md)), applied to all of model development.
+
+2. **Build incrementally.** Start with a simple baseline, make one change at a time, adopt changes only when the evidence is clear.
+
+3. **Use quasi-random search during exploration, Bayesian optimization during exploitation.** Quasi-random search gives uniform coverage and allows flexible post-hoc analysis. Bayesian optimization is more sample-efficient but adapts to the objective.
+
+4. **Check your search spaces.** If the best trials are at the boundary, expand the range and rerun.
+
+5. **Batch size determines training speed, not model quality.** Re-tune learning rate and regularization when you change it. Don't apply simple scaling rules.
+
+6. **Fix training duration and use retrospective checkpoint selection.** Save checkpoints, pick the best one after the fact.
 
 ## References
 
-1.  **Choi et al., 2019b:** Dami Choi, Christopher J. Shallue, Zachary Nado, Jaehoon Lee, Chris J. Maddison, and George E. Dahl. (2019). *On Empirical Comparisons of Optimizers for Deep Learning*. arXiv preprint arXiv:1910.05446. [Link](https://arxiv.org/abs/1910.05446)
+1. **Godbole et al., 2023:** Varun Godbole, George E. Dahl, Justin Gilmer, Christopher J. Shallue, and Zachary Nado. (2023). *Deep Learning Tuning Playbook*. GitHub repository. [Link](https://github.com/google-research/tuning_playbook){:target="_blank"}
 
-2.  **Dahl et al., 2023:** George E. Dahl, Frank Schneider, Zachary Nado, Naman Agarwal, Chandramouli Shama Sastry, Philipp Hennig, Sourabh Medapati, Runa Eschenhagen, Priya Kasimbeg, Daniel Suo, Juhan Bae, Justin Gilmer, Abel L. Peirson, Bilal Khan, Rohan Anil, Mike Rabbat, Shankar Krishnan, Daniel Snider, Ehsan Amid, Kongtao Chen, Chris J. Maddison, Rakshith Vasudev, Michal Badura, Ankush Garg, and Peter Mattson. (2023). *Benchmarking Neural Network Training Algorithms*. arXiv preprint arXiv:2306.07179. [Link](https://arxiv.org/abs/2306.07179)
+2. **Bergstra & Bengio, 2012:** James Bergstra and Yoshua Bengio. (2012). *Random Search for Hyper-Parameter Optimization*. Journal of Machine Learning Research, 13, 281–305. [Link](https://www.jmlr.org/papers/v13/bergstra12a.html){:target="_blank"}
 
-3.  **Dolan & Moré, 2002:** Elizabeth D. Dolan and Jorge J. Moré. (2002). *Benchmarking optimization software with performance profiles*. Mathematical Programming, 91(2), 201-213.
-
-4.  **Kasimbeg et al., 2024:** Priya Kasimbeg, Frank Schneider, Runa Eschenhagen, Juhan Bae, Chandramouli Shama Sastry, Mark Saroufim, Boyuan Feng, Less Wright, Edward Z. Yang, Zachary Nado, Sourabh Medapati, Philipp Hennig, Mike Rabbat, George E. Dahl. (2024). *Accelerating Neural Network Training: An Analysis of the AlgoPerf Competition*. arXiv preprint arXiv:2405.17095. [Link](https://arxiv.org/abs/2405.17095)
-
-5.  **Schneider et al., 2019:** Frank Schneider, Lukas Balles, and Philipp Hennig. (2019). *DeepOBS: A Deep Learning Optimizer Benchmark Suite*. International Conference on Learning Representations (ICLR). [Link](https://arxiv.org/abs/1903.05499)
-
-6.  **Wilson et al., 2017:** Ashia C. Wilson, Rebecca Roelofs, Mitchell Stern, Nathan Srebro, and Benjamin Recht. (2017). *The Marginal Value of Adaptive Gradient Methods in Machine Learning*. Advances in Neural Information Processing Systems (NeurIPS) 30. [Link](https://proceedings.neurips.cc/paper_files/paper/2017/hash/81b3833e2504647f9d794f7d7b9bf341-Abstract.html)
-
+3. **Shallue et al., 2018:** Christopher J. Shallue, Jaehoon Lee, Joseph Antognini, Jascha Sohl-Dickstein, Roy Frostig, and George E. Dahl. (2018). *Measuring the Effects of Data Parallelism on Neural Network Training*. Journal of Machine Learning Research, 20(112), 1–49. [Link](https://arxiv.org/abs/1811.03600){:target="_blank"}
