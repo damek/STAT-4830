@@ -82,6 +82,8 @@ For example:
 
 So if you had infinite compute to tune hyperparameters, the more general optimizer should always win. It can do everything the simpler one can do, plus more. Since Adam's search space contains SGD as a special case, the best Adam configuration is at least as good as the best SGD configuration.
 
+One subtlety: this is only strictly true for **observable metrics** — things like validation loss that you can compute during tuning and use to select the best configuration. If what you actually care about is a non-observable metric like deployed performance (user engagement, downstream task accuracy on data you haven't seen yet, etc.), you can't make this claim without going and checking. The best Adam run on validation loss might not be the best Adam run on deployed performance.
+
 ### 4.2 Finite tuning budgets
 
 But in practice you don't have infinite compute for tuning. You run maybe 20 or 50 trials.
