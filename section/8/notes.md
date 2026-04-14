@@ -566,7 +566,7 @@ $$
 
 where $\Sigma$ is an $m \times n$ matrix that is zero everywhere except $\Sigma_{ii} = \sigma_i$ for $i = 1, \ldots, r$. The $\sigma_i$ are called the **singular values** of $A$. When some of them are zero (i.e., $r < \min(m,n)$), the matrix is low-rank.
 
-Geometrically, any matrix $A$ decomposes into three operations:
+Geometrically, this shows that any matrix $A$ decomposes into three operations:
 
 1. **Rotate** using $V^T$.
 2. **Scale** using $\Sigma$ (stretch or compress along each axis, possibly changing dimension from $\mathbb{R}^n$ to $\mathbb{R}^m$).
