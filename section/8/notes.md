@@ -489,7 +489,25 @@ $$
 H^{-1} \nabla f = \left(\frac{4u^3}{12u^2}, \frac{2w}{2}\right) = \left(\frac{u}{3}, w\right).
 $$
 
-So Newton takes the step $-(u/3, w)$. The $w$ coordinate converges in 1 step (since $f$ is quadratic in $w$). The $u$ coordinate converges cubically fast. Newton's method rotates the axes so the function looks like $x^2 + y^4$ in the rotated basis, then rescales each coordinate.
+So Newton takes the step $-(u/3, w)$. The $w$ coordinate converges in 1 step (since $f$ is quadratic in $w$). The $u$ coordinate converges cubically fast.
+
+### 6.3 Why the Hessian "knows" the rotation
+
+There's a clean way to see why this works in general. Suppose $g$ is an axis-aligned function (like $g(u,w) = w^2 + u^4$), and we define $f(x) = g(Rx)$ where $R$ is a rotation matrix ($R^T = R^{-1}$). Then by the chain rule:
+
+$$
+\nabla f(x) = R^T \nabla g(Rx), \qquad \nabla^2 f(x) = R^T \nabla^2 g(Rx)\, R.
+$$
+
+Now look at the Newton step on $f$:
+
+$$
+(\nabla^2 f)^{-1} \nabla f = (R^T \nabla^2 g \, R)^{-1}\, R^T \nabla g = R^{-1} (\nabla^2 g)^{-1} (R^T)^{-1} R^T \nabla g = R^T (\nabla^2 g)^{-1} \nabla g.
+$$
+
+The Newton step on the rotated function $f$ is just $R^T$ times the Newton step on the axis-aligned function $g$. In other words, inverting the Hessian automatically undoes the rotation — it finds the decoupled coordinates, applies per-coordinate scaling there, and rotates back. You never need to know what $R$ is.
+
+This is exactly what's happening with $f(x,y) = (x-y)^2 + (x+y)^4$: the Hessian "discovers" the rotation to $(u,w)$ coordinates and rescales each axis by the inverse curvature.
 
 ![Newton's method on coupled function](figures/newton_ravine.png)
 
@@ -499,7 +517,7 @@ So Newton takes the step $-(u/3, w)$. The $w$ coordinate converges in 1 step (si
 
 *Figure 6.2: Animated zoom. Newton (green) has already converged before GD (red) and per-coordinate GD (orange) make it halfway down the ravine.*
 
-### 6.3 The catch
+### 6.4 The catch
 
 This is called **Newton's method**. You may remember Newton's method from single-variable calculus as a root-finding algorithm: to find a root of $g(x) = 0$, you iterate $x_+ = x - g(x)/g'(x)$. Here we're doing the same thing, but applied to the gradient $\nabla f(\theta) = 0$ — we want to find the point where the gradient vanishes. The single-variable update $x - g/g'$ becomes $\theta - (\nabla^2 f)^{-1} \nabla f$, where the Hessian $\nabla^2 f$ plays the role of the derivative of the gradient.
 
